@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Dynamic Shield Background -->
+  <path d="M 100 10 L 180 40 L 180 120 C 180 160 140 185 100 190 C 60 185 20 160 20 120 L 20 40 Z" fill="#7f1d1d" />
+  <path d="M 100 10 L 180 40 L 180 120 C 180 160 140 185 100 190 C 60 185 20 160 20 120 L 20 40 Z" fill="url(#grad)" opacity="0.4" />
+  
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.5" />
+    </linearGradient>
+  </defs>
+
+  <!-- OMNI Letters -->
+  <text x="100" y="125" font-family="'JetBrains Mono', monospace" font-weight="900" font-size="64" fill="#ffffff" text-anchor="middle" letter-spacing="-2">OMNI</text>
+  
+  <!-- Subtle Wave -->
+  <path d="M 40 145 Q 70 125 100 145 T 160 145" fill="none" stroke="#38bdf8" stroke-width="8" stroke-linecap="round" />
+</svg>
