@@ -60,6 +60,14 @@ Built with React, Vite, and Tailwind CSS for styling alongside an Express/Python
 | **JSON** | Persistent storage via `meets.json` for all workspace and result data |
 
 ---
+## Recent Edits (2026-05-13)
+
+- Improved team-name recognition in `pdf_parser.py` to reduce duplicate/garbled matches and prefer exact/prefix matches before fuzzy matching.
+- Made scoring engine in `point_calculator.py` configurable; added NCAA D2 default scoring (Top 16) while respecting frontend `scoringSettings`.
+- Implemented checkpoint copies of parser and calculator in `checkpoints/checkpoint_2026-05-13/`.
+
+See `checkpoints/` for saved snapshots and `checklist` for remaining tasks.
+
 ## 🚀 Features
 
 ### 1. **PDF Parsing and Data Extraction**

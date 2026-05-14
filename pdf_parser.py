@@ -91,6 +91,11 @@ def parse_pdf(file_path):
     with pdfplumber.open(file_path) as pdf:
         # Use non-layout mode (natural text flow)
         full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+
+    # Detect conference heuristics (e.g., NSISC) to inform scoring rules downstream
+    conference = None
+    if 'NSISC' in full_text.upper():
+        conference = 'NSISC'
     
     lines = full_text.split('\n')
     
@@ -141,7 +146,18 @@ def parse_pdf(file_path):
     for v in ABBREV_TEAMS.values():
         team_candidates.add(v)
     
-    all_teams = sorted(list(team_candidates), key=len, reverse=True)
+    # Normalize candidate variants to produce a canonical team list (prefer longest descriptive form)
+    canon_map = {}
+    def norm_key(s):
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    for t in team_candidates:
+        if not t: continue
+        nk = norm_key(t)
+        if nk not in canon_map or len(t) > len(canon_map[nk]):
+            canon_map[nk] = t
+
+    all_teams = sorted(list(canon_map.values()), key=len, reverse=True)
     
     def match_team(candidate):
         if not candidate or len(candidate) < 2:
@@ -150,19 +166,46 @@ def parse_pdf(file_path):
         full = match_abbrev_team(candidate)
         if full:
             return full
-        
+
         candidate_clean = re.sub(r'^\d+\s+', '', candidate).strip()
-        
+
+        # Normalize common duplicated tokens like 'University of West Florida University of'
+        def normalize_team_string(s: str) -> str:
+            s = re.sub(r'\s{2,}', ' ', s).strip()
+            # remove trailing repeated halves: 'X Y X Y' -> 'X Y'
+            parts = s.split()
+            half = len(parts) // 2
+            if half > 1 and len(parts) % 2 == 0 and ' '.join(parts[:half]).lower() == ' '.join(parts[half:]).lower():
+                s = ' '.join(parts[:half])
+            # remove common stopwords at end/start
+            s = re.sub(r'\b(the|university|college|state|of)\b\s*$', '', s, flags=re.IGNORECASE).strip()
+            s = re.sub(r'^\b(the|university|college|state|of)\b\s*', '', s, flags=re.IGNORECASE).strip()
+            # strip trailing qualifier tokens like NT, NP, X, X0, SCR, DQ
+            s = re.sub(r'\b(NT|NP|X0|X|SCR|DQ|NC|PROV|IV25|25D2|---)\b\s*$', '', s, flags=re.IGNORECASE).strip()
+            # remove stray numeric-only tokens at end/start
+            s = re.sub(r'^(\d+\s+)', '', s)
+            s = re.sub(r'(\s+\d+)$', '', s)
+            return s
+
+        candidate_clean = normalize_team_string(candidate_clean)
+
+        # Exact match first
         for t in all_teams:
-            if candidate_clean == t:
+            if candidate_clean.lower() == t.lower():
                 return t
+
+        # prefix/suffix matches
         for t in all_teams:
-            if candidate_clean.startswith(t) or t.startswith(candidate_clean):
+            if candidate_clean.lower().startswith(t.lower()) or t.lower().startswith(candidate_clean.lower()):
                 return t
+
+        # substring match
         for t in all_teams:
-            if candidate_clean.upper() in t.upper() or t.upper() in candidate_clean.upper():
+            if candidate_clean.lower() in t.lower() or t.lower() in candidate_clean.lower():
                 return t
-        matches = difflib.get_close_matches(candidate_clean, all_teams, n=1, cutoff=0.3)
+
+        # fuzzy fallback with higher cutoff to avoid bad matches
+        matches = difflib.get_close_matches(candidate_clean, all_teams, n=1, cutoff=0.55)
         if matches:
             return matches[0]
         return None
@@ -208,6 +251,9 @@ def parse_pdf(file_path):
             continue
         if 'C - FINAL' in upper or upper == 'C FINAL' or 'BONUS FINAL' in upper:
             current_round = "C Final"
+            continue
+        if 'D - FINAL' in upper or upper == 'D FINAL':
+            current_round = "D Final"
             continue
         
         # Skip non-data
@@ -310,7 +356,8 @@ def parse_pdf(file_path):
                         "round_swam": current_round, "is_exhibition": is_exhibition,
                         "is_time_trial": current_event_is_time_trial,
                         "rank": rank_match.group(1) if rank_match.group(1) != '---' else None,
-                        "points": points or 0, "relay_names": relay_names
+                        "points": points or 0, "relay_names": relay_names,
+                        "conference": conference
                     }
             continue
         
@@ -419,7 +466,8 @@ def parse_pdf(file_path):
                 "prelims_time": prelims_time, "finals_time": finals_time,
                 "round_swam": current_round, "is_exhibition": is_exhibition,
                 "is_time_trial": current_event_is_time_trial, "rank": rank if rank and rank != '---' else None,
-                "points": points or 0
+                "points": points or 0,
+                "conference": conference
             }
         else:
             ath = athletes[key]
@@ -450,7 +498,8 @@ def parse_pdf(file_path):
                     "prelims_time": data["prelims_time"], "finals_time": data["finals_time"],
                     "round_swam": data["round_swam"], "is_exhibition": data["is_exhibition"],
                     "is_time_trial": data.get("is_time_trial", False),
-                    "rank": data.get("rank"), "extracted_points": data["points"]
+                    "rank": data.get("rank"), "extracted_points": data["points"],
+                    "conference": data.get("conference")
                 })
         else:
             results.append({
@@ -459,7 +508,8 @@ def parse_pdf(file_path):
                 "prelims_time": data["prelims_time"], "finals_time": data["finals_time"],
                 "round_swam": data["round_swam"], "is_exhibition": data["is_exhibition"],
                 "is_time_trial": data.get("is_time_trial", False),
-                "rank": data.get("rank"), "extracted_points": data["points"]
+                "rank": data.get("rank"), "extracted_points": data["points"],
+                "conference": data.get("conference")
             })
     
     print(json.dumps(results))

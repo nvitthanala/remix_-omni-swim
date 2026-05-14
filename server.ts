@@ -157,6 +157,16 @@ async function startServer() {
         }
       }
 
+      // Write current scoring settings for Python calculator to read
+      try {
+        const workspaces = JSON.parse(fs.readFileSync(MEETS_FILE, 'utf-8'));
+        const ws = workspaces && workspaces[0] ? workspaces[0] : null;
+        const scoring = ws && ws.scoringSettings ? ws.scoringSettings : defaultScoringSettings;
+        fs.writeFileSync(path.join(process.cwd(), 'scoring_settings.json'), JSON.stringify(scoring, null, 2));
+      } catch (e) {
+        console.warn('Could not write scoring_settings.json, using defaults.');
+      }
+
       // Run point calculator
       const calcOutput = await runPythonScript('point_calculator.py', [], parserOutput);
 

@@ -1,0 +1,7 @@
+Checkpoint change log (2026-05-13):
+- pdf_parser.py: improved team matching, normalization, canonicalization, strip qualifiers
+- point_calculator.py: added configurable scoring, NCAA D2 defaults, read scoring_settings.json
+- server.ts: write scoring_settings.json prior to calling point_calculator.py
+- compare_all_teams.py: fuzzy-align official names to parsed keys
+- documentation.md: updated notes
+- CODEBASE_DOCS.md and CHANGELOG.md added

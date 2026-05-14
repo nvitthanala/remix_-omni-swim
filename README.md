@@ -58,6 +58,11 @@ Professional analytics for competitive swimming. Parse results, track team stand
 3. **Open in browser:**
    - Navigate to `http://localhost:3000`
 
+See the consolidated docs for details on scoring, parsing, and changelogs:
+
+- `CHANGELOG.md` — recent repository edits and notes.
+- `CODEBASE_DOCS.md` — consolidated documentation of parser and scoring logic, frontend hooks, and run instructions.
+
 ---
 
 ## Troubleshooting
