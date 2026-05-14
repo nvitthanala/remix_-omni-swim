@@ -10,6 +10,7 @@ def is_time(s):
     return bool(re.match(r'^\d*:?\d{1,2}\.\d{2}[a-zA-Z\s]*$', cleaned, re.IGNORECASE))
 
 YEAR_PATTERN = r'\b(FR|SO|JR|SR|5Y|FY|GS|GR)\b'
+AGE_PATTERN = r'\b(\d{1,2})\b'
 QUALIFIER_CODES = r'(NP|NT|DQ|DFS|SCR|NS|NC\b|PROV|D2\s*[AB]|IV25|25D2)'
 
 # Map known abbreviations to full team names
@@ -36,7 +37,8 @@ ABBREV_TEAMS = {
 
 def is_data_line(stripped):
     """Check if line contains athlete data (has class year) or relay info"""
-    if re.search(YEAR_PATTERN, stripped):
+    # Hy-Tek often uses age (numeric) instead of class year; accept either
+    if re.search(YEAR_PATTERN, stripped) or re.search(AGE_PATTERN, stripped):
         return True
     if re.match(r'^\d+\s', stripped) and not any(x in stripped.upper() for x in ['RECORD:', 'MEET:', 'CONF:', '-- ', 'PAGE', 'NCAA', 'HY-TEK']):
         return True
@@ -362,39 +364,92 @@ def parse_pdf(file_path):
             continue
         
         # ===== INDIVIDUAL =====
-        yr_match = re.search(YEAR_PATTERN, stripped)
-        if not yr_match:
-            continue
-        
-        yr = yr_match.group(1).upper()
-        before_yr = stripped[:yr_match.start()].strip()
-        after_yr = stripped[yr_match.end():].strip()
-        
-        rank = None
-        is_exhibition = False
-        name_raw = before_yr
-        
-        rank_exh = re.match(r'^(\d+|---)\s+(.*)', before_yr)
-        if rank_exh:
-            if rank_exh.group(1) == '---':
-                is_exhibition = True
+            # Try Hy-Tek style single-line parsing: Place Name Age TEAM Seed Final [Std]
+            hytek_re = re.compile(r'^(?P<place>\d+|X|#|---)?\s*(?P<name>[A-Za-z\-\']+,\s*[A-Za-z\.\-\s]+)\s+(?P<age>\d{1,2})\s+(?P<team>[A-Za-z0-9\-\&\.]{2,})\s*(?P<rest>.*)$')
+            m = hytek_re.match(stripped)
+            if m:
+                rank = None
+                is_exhibition = False
+                place_tok = m.group('place')
+                if place_tok in ('X', '#', '---'):
+                    is_exhibition = True
+                elif place_tok and place_tok.isdigit():
+                    rank = place_tok
+
+                name = normalize_name(m.group('name'))
+                yr = 'UNKNOWN'
+                age = m.group('age')
+                school_raw = m.group('team')
+                rest = m.group('rest')
+
+                # Extract times and possible points from rest
+                time_match = re.search(r'(\d*:?\d{1,2}\.\d{2}|NT|DQ)', rest)
+                if time_match:
+                    finals_time = time_match.group(1)
+                    after = rest[time_match.end():].strip()
+                else:
+                    finals_time = None
+                    after = rest
+
+                school = match_team(clean_school(school_raw))
+                if not school:
+                    # fallback to existing logic if team not matched
+                    school = match_team(school_raw)
+
+                if not school:
+                    continue
+
+                key = (name, current_event, current_gender)
+                if key not in athletes:
+                    athletes[key] = {
+                        "name": name, "event": current_event, "gender": current_gender,
+                        "team": school, "year": yr, "is_relay": False,
+                        "prelims_time": None, "finals_time": finals_time,
+                        "round_swam": current_round, "is_exhibition": is_exhibition,
+                        "is_time_trial": current_event_is_time_trial, "rank": rank if rank and rank != '---' else None,
+                        "points": None,
+                        "conference": conference
+                    }
+                else:
+                    ath = athletes[key]
+                    if finals_time:
+                        ath['finals_time'] = finals_time
+                continue
+
+            # Fallback: original year-based parsing
+            yr_match = re.search(YEAR_PATTERN, stripped)
+            if not yr_match:
+                continue
+
+            yr = yr_match.group(1).upper()
+            before_yr = stripped[:yr_match.start()].strip()
+            after_yr = stripped[yr_match.end():].strip()
+
+            rank = None
+            is_exhibition = False
+            name_raw = before_yr
+
+            rank_exh = re.match(r'^(\d+|---)\s+(.*)', before_yr)
+            if rank_exh:
+                if rank_exh.group(1) == '---':
+                    is_exhibition = True
+                else:
+                    rank = rank_exh.group(1)
+                name_raw = rank_exh.group(2).strip()
+
+            if not name_raw:
+                continue
+
+            name = normalize_name(name_raw)
+
+            # After year: School [Times...]
+            time_match = re.search(r'(\d*:?\d{1,2}\.\d{2})', after_yr)
+            if time_match:
+                school_raw = clean_school(after_yr[:time_match.start()].strip())
+                rest = after_yr[time_match.start():].strip()
             else:
-                rank = rank_exh.group(1)
-            name_raw = rank_exh.group(2).strip()
-        
-        if not name_raw:
-            continue
-        
-        name = normalize_name(name_raw)
-        
-        # After year: School [Times...]
-        time_match = re.search(r'(\d*:?\d{1,2}\.\d{2})', after_yr)
-        if time_match:
-            school_raw = clean_school(after_yr[:time_match.start()].strip())
-            rest = after_yr[time_match.start():].strip()
-        else:
-            school_raw = clean_school(after_yr)
-            rest = ''
+                school_raw = clean_school(after_yr)
+                rest = ''
         
         # Handle GLVC: "17 UMSL" -> remove seed position before team
         school_raw = re.sub(r'^\d+\s+', '', school_raw)
@@ -458,6 +513,9 @@ def parse_pdf(file_path):
                 prelims_time = None
                 finals_time = None
         
+        # Defensive: if parser didn't set a name for this line, skip
+        if 'name' not in locals() or not name:
+            continue
         key = (name, current_event, current_gender)
         if key not in athletes:
             athletes[key] = {
