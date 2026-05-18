@@ -18,9 +18,17 @@ async function runPythonScript(scriptPath: string, args: string[], stdin?: strin
   return new Promise((resolve, reject) => {
     const venvPython = process.platform === 'win32' ? path.join(process.cwd(), 'venv', 'Scripts', 'python') : path.join(process.cwd(), 'venv', 'bin', 'python');
     const pythonCmd = fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3');
-    const proc = spawn(pythonCmd, [scriptPath, ...args]);
+    
+    let proc;
+    try {
+      proc = spawn(pythonCmd, [scriptPath, ...args]);
+    } catch (err) {
+      return reject(new Error(`Failed to spawn Python process: ${err}`));
+    }
+
     let output = '';
     let errorOutput = '';
+    let resolved = false;
 
     proc.stdout.on('data', (data) => {
       output += data.toString();
@@ -30,17 +38,34 @@ async function runPythonScript(scriptPath: string, args: string[], stdin?: strin
       errorOutput += data.toString();
     });
 
+    proc.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        reject(new Error(`Python process error: ${err.message}`));
+      }
+    });
+
     proc.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Python script failed with code ${code}\nError: ${errorOutput}`));
-      } else {
-        resolve(output);
+      if (!resolved) {
+        resolved = true;
+        if (code !== 0) {
+          reject(new Error(`Python script failed with code ${code}\nError: ${errorOutput}`));
+        } else {
+          resolve(output);
+        }
       }
     });
 
     if (stdin) {
-      proc.stdin.write(stdin);
-      proc.stdin.end();
+      try {
+        proc.stdin.write(stdin);
+        proc.stdin.end();
+      } catch (err) {
+        if (!resolved) {
+          resolved = true;
+          reject(new Error(`Failed to write to Python stdin: ${err}`));
+        }
+      }
     }
   });
 }
@@ -135,26 +160,52 @@ async function startServer() {
 
   app.post('/api/parse-pdf', async (req, res) => {
     const tempFile = path.join(process.cwd(), `temp_${Date.now()}.pdf`);
+    let responseSent = false;
+
     try {
       const { base64 } = req.body;
-      const buffer = Buffer.from(base64, 'base64');
-      fs.writeFileSync(tempFile, buffer);
+      if (!base64) {
+        responseSent = true;
+        return res.status(400).json({ error: 'No base64 PDF data provided' });
+      }
+
+      let buffer;
+      try {
+        buffer = Buffer.from(base64, 'base64');
+      } catch (err) {
+        responseSent = true;
+        return res.status(400).json({ error: 'Invalid base64 encoding' });
+      }
+
+      try {
+        fs.writeFileSync(tempFile, buffer);
+      } catch (err) {
+        responseSent = true;
+        return res.status(500).json({ error: 'Failed to save PDF file', details: String(err) });
+      }
 
       // Run pdf parser
-      const parserOutput = await runPythonScript('pdf_parser.py', [tempFile]);
-      
+      let parserOutput;
+      try {
+        parserOutput = await runPythonScript('pdf_parser.py', [tempFile]);
+      } catch (err) {
+        responseSent = true;
+        return res.status(500).json({ error: 'PDF parsing failed', details: String(err) });
+      }
+
       // Check if parser returned an error object
       try {
         const parsedJson = JSON.parse(parserOutput.trim());
         if (!Array.isArray(parsedJson) && parsedJson.error) {
-          throw new Error(parsedJson.error); // Will be caught by outer block
+          responseSent = true;
+          return res.status(500).json({ error: 'PDF parsing failed', details: parsedJson.error });
         }
-      } catch(e: any) {
-        if (e instanceof SyntaxError) {
-          console.warn("Parser output was not valid JSON:", parserOutput.substring(0, 100));
-        } else {
-          throw e; // Rethrow to outer block
+      } catch (e: any) {
+        if (!(e instanceof SyntaxError)) {
+          responseSent = true;
+          return res.status(500).json({ error: 'PDF parsing failed', details: String(e) });
         }
+        console.warn("Parser output was not valid JSON:", parserOutput.substring(0, 100));
       }
 
       // Write current scoring settings for Python calculator to read
@@ -168,10 +219,22 @@ async function startServer() {
       }
 
       // Run point calculator
-      const calcOutput = await runPythonScript('point_calculator.py', [], parserOutput);
+      let calcOutput;
+      try {
+        calcOutput = await runPythonScript('point_calculator.py', [], parserOutput);
+      } catch (err) {
+        responseSent = true;
+        return res.status(500).json({ error: 'Points calculation failed', details: String(err) });
+      }
 
-      const athletes = JSON.parse(calcOutput);
-      
+      let athletes;
+      try {
+        athletes = JSON.parse(calcOutput);
+      } catch (err) {
+        responseSent = true;
+        return res.status(500).json({ error: 'Invalid calculation output', details: String(err) });
+      }
+
       // Map to frontend structure
       const results: SwimmerResult[] = athletes.map((a: any) => ({
         id: uuidv4(),
@@ -192,13 +255,21 @@ async function startServer() {
         relayNames: a.relay_names || []
       }));
 
+      responseSent = true;
       res.json({ results });
     } catch (error: any) {
       console.error('PDF Parse Error:', error);
-      res.status(500).json({ error: 'Failed to parse PDF', details: error.message });
+      if (!responseSent) {
+        responseSent = true;
+        res.status(500).json({ error: 'Failed to parse PDF', details: error.message });
+      }
     } finally {
-      if (fs.existsSync(tempFile)) {
-        fs.unlinkSync(tempFile);
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile);
+        }
+      } catch (err) {
+        console.warn('Failed to clean up temp PDF file:', err);
       }
     }
   });
@@ -218,9 +289,40 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Error handling middleware
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('Express Error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error', details: err.message });
+    }
+  });
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  // Handle server errors
+  server.on('error', (err) => {
+    console.error('Server error:', err);
+  });
+
+  // Handle socket errors
+  server.on('clientError', (err, socket) => {
+    console.error('Client error:', err);
+    if (socket.writable) {
+      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    }
+  });
 }
+
+// Global error handlers
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  process.exit(1);
+});
 
 startServer();
