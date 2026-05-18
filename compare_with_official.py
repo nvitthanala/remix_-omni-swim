@@ -42,15 +42,12 @@ except Exception as e:
     sys.exit(1)
 
 # Aggregate per team/gender/event
-team_event = defaultdict(lambda: defaultdict(float))  # team_event[(team,gender)][event] = points
+team_event = {}  # team_event[(team,gender,event)] = {'points': float} or {'relay_shares': [...], 'relay_rank': rank}
 team_totals = defaultdict(lambda: defaultdict(float))  # team_totals[team][gender]
 # Need SCORING defaults
 import point_calculator as pc
 SC = pc._resolve_scoring_settings().get('scoringPoints')
 relay_mult = pc._resolve_scoring_settings().get('relayMultiplier')
-
-# Build relay grouping to compute team relay points (count once per team-event)
-relay_seen = set()
 
 for a in scored:
     team = a.get('team') or 'UNKNOWN'
@@ -61,34 +58,33 @@ for a in scored:
     rank = a.get('rank')
     key = (team, gender, event)
     if is_relay:
-        # accumulate swimmer shares; we'll compute team-level once later
-        # use a structure to collect swimmer shares
-        if 'relay_shares' not in team_event[key]:
-            team_event[key]['relay_shares'] = []
-            team_event[key]['relay_rank'] = None
+        if key not in team_event:
+            team_event[key] = {'relay_shares': [], 'relay_rank': None}
         if isinstance(pts, (int, float)):
             team_event[key]['relay_shares'].append(float(pts))
-        if rank and (not team_event[key]['relay_rank']):
+        if rank and not team_event[key].get('relay_rank'):
             team_event[key]['relay_rank'] = rank
     else:
         if isinstance(pts, (int, float)):
-            team_event[key] += float(pts)
+            if key not in team_event:
+                team_event[key] = {'points': 0.0}
+            team_event[key]['points'] += float(pts)
             team_totals[team][gender] += float(pts)
 
 # Now finalize relay team points
 for (team, gender, event), vals in list(team_event.items()):
     if 'relay_shares' in vals:
         shares = vals['relay_shares']
-        rnk = vals.get('relay_rank')
-        team_pts = None
-        if rnk and str(rnk).isdigit():
-            idx = int(rnk) - 1
-            if 0 <= idx < len(SC):
-                team_pts = SC[idx] * relay_mult
-        if team_pts is None:
-            # if shares present, sum them (should equal team pts if halfRate was used)
-            team_pts = sum(shares)
-        # record
+        if not shares:
+            continue
+        # Prefer the actual relay shares sum so A/B finals and swim-off contributions are preserved.
+        team_pts = sum(shares)
+        if team_pts == 0:
+            rnk = vals.get('relay_rank')
+            if rnk and str(rnk).isdigit():
+                idx = int(rnk) - 1
+                if 0 <= idx < len(SC):
+                    team_pts = SC[idx] * relay_mult
         team_event[(team, gender, event)] = team_pts
         team_totals[team][gender] += team_pts
 
