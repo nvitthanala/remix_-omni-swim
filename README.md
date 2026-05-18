@@ -1,7 +1,7 @@
 # OMNI-SWIM: Matrix Suite
 
 <div align="center">
-  <img src="public/logo.png" alt="OMNI-SWIM Logo - Swimming Analytics" width="200" />
+  <img src="public/OMNISWIMLOGO.png" alt="OMNI-SWIM Logo - Swimming Analytics" width="200" />
 </div>
 
 Professional analytics for competitive swimming. Parse results, track team standings, and simulate recruit impacts.

@@ -190,7 +190,7 @@ export default function App() {
       <header className="h-16 flex items-center justify-between px-6 bg-[#0c0f16] border-b border-[#1f2937] z-20">
         <div className="flex items-center gap-4">
           <div className="w-10 h-10 flex items-center justify-center bg-[#51131c] rounded shadow shadow-rose-900/20 border border-rose-500/20 overflow-hidden">
-            <img src="/logo.png" alt="Omni Swim Logo" className="w-full h-full object-contain p-1" />
+            <img src="/OMNISWIMLOGO.png" alt="Omni Swim Logo" className="w-full h-full object-contain p-1" />
           </div>
           <h1 className="text-xl font-black tracking-tighter text-white">OMNI SWIM <span className="text-rose-400 font-normal">MATRIX</span></h1>
         </div>
