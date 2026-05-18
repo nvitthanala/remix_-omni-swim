@@ -104,7 +104,7 @@ See `checkpoints/` for saved snapshots and `checklist` for remaining tasks.
 
 ### User Interface Polish
 *   **Dark Mode Contrast:** Fixed all instances of unreadable `text-black` or `text-gray-800` text elements in a dark background. Hardened the dark mode palette by replacing these with `text-white` or `text-gray-400`.
-*   **Logo Visibility:** Removed the PNG logo bearing white/grey checkerboard artifacts, replacing it with a clean, dynamic, scaleable `logo.svg`. Updated both the Favicon and the In-App Header to utilize the SVG.
+*   **Logo Visibility:** Removed the PNG logo bearing white/grey checkerboard artifacts, replacing it with a clean, transparent `logo.png`. Updated both the Favicon and the In-App Header to utilize the PNG.
 *   **Compressed Event Graphs:** Implemented `slice(0, 8)` to limit the Recharts "Top Events" graph exclusively to the Top 8 scoring events to prevent X-Axis label overflow and ensure high dashboard density.
 
 ### Data Aggregations
