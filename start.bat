@@ -8,20 +8,12 @@ node -v >nul 2>&1
 if errorlevel 1 goto missing_node
 echo [OK] Node.js is installed.
 
-if not exist "node_modules\" (
-    echo [!] Installing JavaScript dependencies...
-    call npm install
-)
-
 python --version >nul 2>&1
 if errorlevel 1 goto missing_python
 echo [OK] Python is installed.
 
-if not exist "venv\" (
-    echo [!] Creating Python virtual environment...
-    python -m venv venv
-)
-echo [OK] Virtual environment ready.
+echo [!] Initializing Omni Swim Setup (Scanning dependencies)...
+node scan_deps.mjs
 
 echo ===================================================
 echo [!] CLEANING UP STALE SERVER PROCESSES...

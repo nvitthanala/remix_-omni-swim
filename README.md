@@ -47,21 +47,23 @@ Professional analytics for competitive swimming. Parse results, track team stand
 
 ---
 
-## Getting Started
+## One-Click Setup and Start
 
-1. **Install dependencies:**
-   ```bash
-   npm install
-   pip install pdfplumber
-   ```
+Starting the application requires zero manual configuration. The project features a dynamic dependency scanner that automatically installs everything you need on the first run.
 
-2. **Start the app:**
-   - Windows: `start.bat`
-   - macOS/Linux: `start.sh`
-   - Or run: `npm run dev`
+1. **Start the app:**
+   - Windows: Double-click `start.bat` (or run in terminal)
+   - macOS/Linux: Run `./start.sh` in your terminal
+   
+2. **What the script does automatically:**
+   - Scans the entire codebase for required Node and Python dependencies.
+   - Installs Node dependencies (`npm install`) and syncs `package.json`.
+   - Creates a Python virtual environment (`venv`).
+   - Syncs Python dependencies via `pip install -r requirements.txt`.
+   - Starts the application backend and frontend.
+   - Opens your default web browser to `http://localhost:3000`.
 
-3. **Open in browser:**
-   - Navigate to `http://localhost:3000`
+*Note: You can also use `npm run dev` or `npm start` directly; the dependency scanner will still run as a prestart script to ensure your environment is fully configured.*
 
 See the consolidated docs for details on scoring, parsing, and changelogs:
 
@@ -72,9 +74,8 @@ See the consolidated docs for details on scoring, parsing, and changelogs:
 
 ## Troubleshooting
 
-- **Node.js Missing**: Install from https://nodejs.org/
-- **Python Missing**: Install from https://www.python.org/downloads/ and add to PATH
-- **Python Dependency**: `start.bat` installs `pdfplumber` automatically if needed
+- **Node.js Missing**: The startup scripts check for Node.js. If missing, install from https://nodejs.org/
+- **Python Missing**: The startup scripts check for Python. If missing, install from https://www.python.org/downloads/ and add it to your PATH.
 
 ---
 

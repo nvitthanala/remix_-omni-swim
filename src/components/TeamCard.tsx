@@ -188,23 +188,40 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
               )}
             </>
           ) : (
-            data.swimmers && data.swimmers.length > 0 ? data.swimmers.map((s: any, idx: number) => (
-              <div key={idx} className="flex items-center justify-between py-1 border-b border-gray-800/50 last:border-0 swimmer-row" style={{ fontSize: 'clamp(7px, 4.5cqi, 11px)' }}>
-                <div className="flex items-center gap-2">
-                  <span className="w-4 font-mono text-gray-500">{s.rank || '-'}</span>
-                  {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
-                  {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
-                  {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
-                  <span className="font-medium text-gray-200 truncate max-w-[120px]">{s.name}</span>
-                  {s.cutline_achieved && <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1 rounded ml-1">CUT</span>}
+            data.swimmers && data.swimmers.length > 0 ? data.swimmers.map((s: any, idx: number) => {
+              // Compute Cutlines dynamically
+              const timeSec = convertTimeToSeconds(s.finalsTime || s.time);
+              const cleanEvent = s.event.replace(" (Avg Split)", "").replace(/ Yard /i, " ").replace(/ Meter /i, " ").trim();
+              const cutsForEvent = cutlines.filter(c => c.gender.toUpperCase() === (gender === Gender.MEN ? 'MEN' : 'WOMEN') && c.event.toUpperCase() === cleanEvent.toUpperCase());
+              
+              const aCut = cutsForEvent.find(c => c.standard === 'A');
+              const bCut = cutsForEvent.find(c => c.standard === 'B');
+              
+              const aCutSec = aCut ? convertTimeToSeconds(aCut.time_25_26) : 0;
+              const bCutSec = bCut ? convertTimeToSeconds(bCut.time_25_26) : 0;
+              
+              const isACut = aCutSec > 0 && timeSec <= aCutSec;
+              const isBCut = !isACut && bCutSec > 0 && timeSec <= bCutSec;
+
+              return (
+                <div key={idx} className="flex items-center justify-between py-1 border-b border-gray-800/50 last:border-0 swimmer-row" style={{ fontSize: 'clamp(7px, 4.5cqi, 11px)' }}>
+                  <div className="flex items-center gap-2">
+                    <span className="w-4 font-mono text-gray-500">{s.rank || '-'}</span>
+                    {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
+                    {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
+                    {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
+                    <span className="font-medium text-gray-200 truncate max-w-[120px]">{s.name}</span>
+                    {isACut && <span className="text-[7px] bg-rose-400/10 text-rose-400 px-1 border border-rose-400/30 rounded-sm ml-1" title="A CUT">A CUT</span>}
+                    {isBCut && <span className="text-[7px] bg-amber-400/10 text-amber-400 px-1 border border-amber-400/30 rounded-sm ml-1" title="B CUT">B CUT</span>}
+                  </div>
+                  <div className="flex gap-3 text-right">
+                    <span className="font-mono text-gray-500">{s.prelimsTime ? `P:${s.prelimsTime}` : ''}</span>
+                    <span className="font-mono text-gray-300">{s.finalsTime ? `F:${s.finalsTime}` : s.time}</span>
+                    <span className="font-mono text-emerald-400 font-bold">{typeof s.points === 'number' ? s.points.toFixed(1) : s.points}</span>
+                  </div>
                 </div>
-                <div className="flex gap-3 text-right">
-                  <span className="font-mono text-gray-500">{s.prelimsTime ? `P:${s.prelimsTime}` : ''}</span>
-                  <span className="font-mono text-gray-300">{s.finalsTime ? `F:${s.finalsTime}` : s.time}</span>
-                  <span className="font-mono text-emerald-400 font-bold">{typeof s.points === 'number' ? s.points.toFixed(1) : s.points}</span>
-                </div>
-              </div>
-            )) : (
+              );
+            }) : (
               <div className="text-gray-500 text-[9px] italic">No scoring swimmers</div>
             )
           )}
@@ -247,7 +264,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
           >
             <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
               {/* Stats & Charts */}
-              <div className="lg:col-span-5 space-y-4">
+              <div className="lg:col-span-8 space-y-4">
                 <div className="flex items-center gap-2">
                   <BarChart3 size={14} className="text-rose-400" />
                   <span className="text-[10px] font-medium uppercase tracking-widest text-theme-secondary">Total Points by Event & Class</span>
@@ -403,7 +420,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
               </div>
 
               {/* Individual/Event Matrix */}
-              <div className="lg:col-span-7">
+              <div className="lg:col-span-4">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <List size={14} className="text-rose-400" />

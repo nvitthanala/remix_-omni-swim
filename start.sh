@@ -16,30 +16,18 @@ else
     echo "[OK] Node.js is installed."
 fi
 
-# Install npm dependencies
-if [ ! -d "node_modules" ]; then
-    echo "[] Installing JavaScript dependencies..."
-    npm install
-fi
-
 # Check for Python
-if ! command -v python3 &> /dev/null
+if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null
 then
-    echo "[!] Python3 could not be found."
+    echo "[!] Python could not be found."
     echo "Please install Python 3.x using your system package manager."
     exit 1
 else
     echo "[OK] Python is installed."
 fi
 
-# Install python packages
-if ! python3 -c "import pdfplumber" &> /dev/null; then
-    echo "[] Installing Python dependencies..."
-    if [ ! -d "venv" ]; then
-        python3 -m venv venv
-    fi
-    ./venv/bin/pip install pdfplumber
-fi
+echo "[!] Scanning and installing dependencies..."
+node scan_deps.mjs
 
 echo "==================================================="
 echo "[!] STARTING OMNI SWIM APP..."
@@ -47,5 +35,5 @@ echo "[!] A browser tab will open automatically."
 echo "[!] KEEP THIS TERMINAL OPEN."
 echo "==================================================="
 
-(sleep 4 && python3 -c "import webbrowser; webbrowser.open('http://localhost:3000')") &
+(sleep 4 && python3 -c "import webbrowser; webbrowser.open('http://localhost:3000')" 2>/dev/null || python -c "import webbrowser; webbrowser.open('http://localhost:3000')" 2>/dev/null) &
 npm run dev

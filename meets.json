@@ -32556,7 +32556,7 @@
       "relayMultiplier": 2,
       "halfRateRelaySwimmer": true,
       "maxIndividualScorersPerTeam": 4,
-      "maxRelaysScoringPerTeam": 1
+      "maxRelaysScoringPerTeam": 2
     }
   }
 ]
