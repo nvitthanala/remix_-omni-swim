@@ -110,6 +110,27 @@ See `checkpoints/` for saved snapshots and `checklist` for remaining tasks.
 ### Data Aggregations
 *   **Dual Graphs Integration:** Built alongside the event performance graph, we successfully reintegrated the Points by Academic class distribution chart (showing FR, SO, JR, SR in a nested layout for quick coach overview).
 
+### Git Commit History
+*   **2afdc2e** - feat: automate dev setup and compute dynamic cutlines
+*   **acb763e** - File Cleanup post-local machine testing
+*   **225d1fc** - feat(scoring): Enhance PDF parsing robustness and update score calculation logic
+*   **358b152** - feat: load scoring settings from JSON configuration file
+*   **3a95926** - feat: Enhance data handling and calculation logic in meets parser
+*   **87a1e0f** - feat(readme): Update development tools and fix utility script logic
+*   **f8c3c25** - fix: improve Python stdin handling and error reporting; fix point_calculator path
+*   **eda49a4** - feat: Enhance robustness and add AI models support
+*   **98c018a** - feat: Update logo assets and references to OMNI-SWIM
+*   **dcf86d0** - feat: Update index.html with improved favicon support
+*   **d6b2ce1** - feat: Add SVG logo asset to public directory
+*   **13dfb48** - feat(docs): Update logo asset and polish dark mode contrast
+*   **600760f** - feat: Update documentation with advanced AI assistance options
+*   **d201129** - Refactors core utility logic into utils/ directory to improve modularity and maintainability. Integrates enhanced PDF processing capabilities by adopting pypdfium2, significantly improving data extraction from meet results. Updates the testing suite structure, moving test outputs and adding dedicated scoring tests for better coverage. Includes numerous dependency updates (e.g., cryptography, pdfplumber) to support these enhancements.
+*   **9eeb782** - more parser logic work
+*   **ad5aab3** - docs(readme): restructure readme with logo, setup guide, and sections
+*   **0941e95** - Readme.md updated.
+*   **76fd86b** - initial commit
+*   **bccac4f** - first commit
+
 ---
 
 ## 📂 File System Guide
