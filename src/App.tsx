@@ -20,7 +20,9 @@ import {
   Download,
   AlertCircle,
   BarChart3,
-  Waves
+  Waves,
+  Moon,
+  Sun
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Gender, Workspace, SwimmerResult, Recruit, ClassYear, ScoringSettings } from './types';
@@ -39,7 +41,18 @@ export default function App() {
   const [deletedWorkspaceBackup, setDeletedWorkspaceBackup] = useState<Workspace | null>(null);
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [editWorkspaceName, setEditWorkspaceName] = useState('');
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    const stored = window.localStorage.getItem('omni-theme');
+    if (stored === 'dark' || stored === 'light') return stored;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
   const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem('omni-theme', theme);
+  }, [theme]);
 
   const fetchWorkspaces = useCallback(async () => {
     try {
@@ -153,19 +166,19 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-[#0A0A0A]">
+      <div className="h-screen w-screen flex items-center justify-center bg-[var(--bg)]">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
         >
-          <Waves className="w-12 h-12 text-[#00F5FF]" />
+          <Waves className="w-12 h-12 text-[var(--text-accent)]" />
         </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#05070a] text-gray-200 overflow-hidden relative">
+    <div className="app-shell flex flex-col h-screen overflow-hidden relative">
       {/* Undo Toast */}
       <AnimatePresence>
         {deletedWorkspaceBackup && (
@@ -187,48 +200,56 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="h-16 flex items-center justify-between px-6 bg-[#0c0f16] border-b border-[#1f2937] z-20">
+      <header className="app-header h-16 flex items-center justify-between px-6 z-20">
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 flex items-center justify-center bg-[#51131c] rounded shadow shadow-rose-900/20 border border-rose-500/20 overflow-hidden">
+          <div className="w-10 h-10 flex items-center justify-center bg-[var(--surface-muted)] rounded shadow shadow-black/20 border border-[var(--border)] overflow-hidden">
             <img src="/OMNISWIMLOGO.png" alt="Omni Swim Logo" className="w-full h-full object-contain p-1" />
           </div>
-          <h1 className="text-xl font-black tracking-tighter text-white">OMNI SWIM <span className="text-rose-400 font-normal">MATRIX</span></h1>
+          <h1 className="text-xl font-black tracking-tighter text-[var(--text-primary)]">OMNI SWIM <span className="text-[var(--text-accent)] font-semibold">MATRIX</span></h1>
         </div>
 
-        <nav className="flex gap-1 bg-black p-1 rounded-md border border-[#1f2937]">
-          <button 
-            onClick={() => setActiveGender(Gender.MEN)}
-            className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
-              activeGender === Gender.MEN 
-                ? 'bg-[#1f2937] text-rose-400' 
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Men's Operations
-          </button>
-          <button 
-            onClick={() => setActiveGender(Gender.WOMEN)}
-            className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
-              activeGender === Gender.WOMEN 
-                ? 'bg-[#1f2937] text-rose-400' 
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Women's Operations
-          </button>
-        </nav>
+        <div className="flex items-center gap-2">
+          <nav className="flex gap-1 bg-[var(--surface)] p-1 rounded-md border border-[var(--border)]">
+            <button 
+              onClick={() => setActiveGender(Gender.MEN)}
+              className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
+                activeGender === Gender.MEN 
+                  ? 'bg-[#1f2937] text-rose-400' 
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Men's Operations
+            </button>
+            <button 
+              onClick={() => setActiveGender(Gender.WOMEN)}
+              className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
+                activeGender === Gender.WOMEN 
+                  ? 'bg-[#1f2937] text-rose-400' 
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Women's Operations
+            </button>
+          </nav>
 
-        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="theme-toggle-button p-2 rounded-md border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+            aria-label="Toggle color mode"
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+
           {activeWorkspace && (
             <div className="flex items-center gap-2">
-               <button 
+              <button 
                 onClick={() => setShowSettingsParamsManager(true)}
-                className="p-1.5 hover:bg-white/10 rounded text-rose-400 border border-rose-400/20 bg-rose-900/20 transition-colors"
+                className="p-1.5 hover:bg-white/10 rounded text-[var(--text-accent)] border border-[var(--text-accent)]/20 bg-[var(--text-accent)]/10 transition-colors"
                 title="Configure Scoring Model"
               >
                 <Settings size={14} />
               </button>
-              <div className="px-3 py-1.5 text-[10px] font-mono bg-rose-900/30 text-rose-400 border border-rose-400/30 rounded-full flex items-center">
+              <div className="px-3 py-1.5 text-[10px] font-mono bg-[var(--surface-muted)] text-[var(--text-accent)] border border-[var(--text-accent)]/20 rounded-full flex items-center">
                 <span className="truncate max-w-[150px]">WORKSPACE: {activeWorkspace.name.toUpperCase().replace(/\s+/g, '_')}</span>
               </div>
             </div>
@@ -239,7 +260,7 @@ export default function App() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Workspace Sidebar */}
-        <aside className="w-64 bg-[#080b11] border-r border-[#1f2937] flex flex-col">
+        <aside className="workspace-sidebar w-64 flex flex-col">
           <div className="p-4 flex flex-col gap-2">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Active Sessions</h2>
@@ -256,8 +277,8 @@ export default function App() {
                   onClick={() => setActiveWorkspaceId(w.id)}
                   className={`flex flex-col p-3 rounded-r-md border-l-4 transition-all w-full text-left ${
                     activeWorkspaceId === w.id 
-                      ? 'bg-[#111622] border-rose-400' 
-                      : 'bg-[#111622]/40 border-gray-800 hover:bg-[#111622]/60'
+                      ? 'surface-card border-rose-400' 
+                      : 'surface-soft border-theme-soft hover:bg-white/5'
                   }`}
                 >
                   <div className="flex justify-between items-start w-full pr-6">
@@ -268,19 +289,19 @@ export default function App() {
                         onChange={e => setEditWorkspaceName(e.target.value)}
                         onBlur={() => handleRenameWorkspace(w.id)}
                         onKeyDown={e => e.key === 'Enter' && handleRenameWorkspace(w.id)}
-                        className="bg-black text-rose-400 text-xs font-bold border border-rose-400/50 rounded px-1 outline-none w-full"
+                        className="surface-muted-bg text-[var(--text-accent)] text-xs font-bold border border-[var(--text-accent)]/50 rounded px-1 outline-none w-full"
                         onClick={e => e.stopPropagation()}
                       />
                     ) : (
                       <span 
                         onDoubleClick={(e) => { e.stopPropagation(); setEditingWorkspaceId(w.id); setEditWorkspaceName(w.name); }}
-                        className={`text-xs font-bold truncate ${activeWorkspaceId === w.id ? 'text-white' : 'text-gray-500'}`}
+                        className={`text-xs font-bold truncate ${activeWorkspaceId === w.id ? 'text-[var(--text-primary)]' : 'text-theme-secondary'}`}
                         title="Double click to rename"
                       >
                         {w.name.toUpperCase()}
                       </span>
                     )}
-                    <FileText size={12} className={activeWorkspaceId === w.id ? 'text-rose-400 shrink-0' : 'text-gray-500 shrink-0'} />
+                    <FileText size={12} className={activeWorkspaceId === w.id ? 'text-[var(--text-accent)] shrink-0' : 'text-theme-secondary shrink-0'} />
                   </div>
                   <div className="text-[9px] text-gray-500 mt-1 uppercase font-mono">
                     {new Date(w.createdAt).toLocaleDateString()}
@@ -296,8 +317,8 @@ export default function App() {
             ))}
           </div>
 
-          <div className="mt-auto p-4 border-t border-[#1f2937] bg-black/20">
-            <button className="w-full flex items-center justify-center gap-2 py-2 bg-gray-800 text-[10px] font-bold rounded border border-gray-700 hover:bg-gray-700 uppercase tracking-widest transition-colors">
+          <div className="mt-auto p-4 border-t border-theme surface-overlay">
+            <button className="w-full flex items-center justify-center gap-2 py-2 bg-[var(--surface-strong)] text-[var(--text-primary)] font-bold rounded border border-[var(--border)] hover:bg-[var(--surface-strong)]/90 uppercase tracking-widest transition-colors">
               <Download size={14} />
               <span>Export Matrix</span>
             </button>
@@ -305,7 +326,7 @@ export default function App() {
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto bg-[#05070a]">
+        <main className="main-content flex-1 overflow-y-auto">
           {activeWorkspace ? (
             <AnimatePresence mode="wait">
               <motion.div
@@ -324,12 +345,12 @@ export default function App() {
               </motion.div>
             </AnimatePresence>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-4">
-              <div className="p-6 rounded border border-[#1f2937] bg-[#0c0f16]">
-                <AlertCircle size={48} className="text-gray-500" />
+            <div className="h-full flex flex-col items-center justify-center text-theme-secondary space-y-4">
+              <div className="p-6 rounded border border-theme surface-card">
+                <AlertCircle size={48} className="text-theme-secondary" />
               </div>
-              <p className="text-xs uppercase tracking-widest font-bold">No Workspace Selected</p>
-              <button onClick={createWorkspace} className="px-6 py-2 bg-rose-900 border border-rose-500/50 text-rose-400 uppercase tracking-widest text-[10px] font-bold rounded-sm hover:bg-rose-800 transition-colors">
+              <p className="text-xs uppercase tracking-widest font-bold text-[var(--text-primary)]">No Workspace Selected</p>
+              <button onClick={createWorkspace} className="px-6 py-2 bg-[var(--text-accent)] border border-[var(--text-accent)]/30 text-white uppercase tracking-widest text-[10px] font-bold rounded-sm hover:bg-[var(--text-accent)]/90 transition-colors">
                 Initialize System
               </button>
             </div>
@@ -338,7 +359,7 @@ export default function App() {
       </div>
 
       {/* Footer */}
-      <footer className="h-8 bg-black border-t border-[#1f2937] px-4 flex items-center justify-between text-[10px] text-gray-500 font-mono">
+      <footer className="app-footer h-8 px-4 flex items-center justify-between text-[10px] font-mono">
         <div className="flex gap-4">
           <span className="flex items-center gap-1"><div className="w-1 h-1 bg-green-500 rounded-full" /> SYSTEM: READY</span>
           <span>PDF ENGINE: active v2.1</span>

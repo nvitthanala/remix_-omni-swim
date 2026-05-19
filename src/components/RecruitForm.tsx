@@ -78,12 +78,12 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
           <select
             value={formData.team}
             onChange={e => setFormData({ ...formData, team: e.target.value })}
-            className="glass-input w-full appearance-none bg-black"
+            className="glass-input w-full appearance-none"
           >
             {teams.length > 0 ? (
-              teams.map(t => <option key={t} value={t} className="bg-black">{t}</option>)
+              teams.map(t => <option key={t} value={t}>{t}</option>)
             ) : (
-              <option value="Unassigned" className="bg-black">Unassigned</option>
+              <option value="Unassigned">Unassigned</option>
             )}
           </select>
         </div>
@@ -92,11 +92,11 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
           <select
             value={formData.timeType}
             onChange={e => setFormData({ ...formData, timeType: e.target.value as any })}
-            className="glass-input w-full appearance-none bg-black"
+            className="glass-input w-full appearance-none"
           >
-            <option value="SCY" className="bg-black">SCY (Yards)</option>
-            <option value="LCM" className="bg-black">LCM (Meters)</option>
-            <option value="SCM" className="bg-black">SCM (Meters)</option>
+            <option value="SCY">SCY (Yards)</option>
+            <option value="LCM">LCM (Meters)</option>
+            <option value="SCM">SCM (Meters)</option>
           </select>
         </div>
       </div>
@@ -107,20 +107,20 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
           <select
             value={formData.event}
             onChange={e => setFormData({ ...formData, event: e.target.value })}
-            className="glass-input w-full appearance-none bg-black"
+            className="glass-input w-full appearance-none"
           >
-            {EVENTS.map(ev => <option key={ev} value={ev} className="bg-black">{ev}</option>)}
+            {EVENTS.map(ev => <option key={ev} value={ev}>{ev}</option>)}
           </select>
           <select
             value={formData.classYear}
             onChange={e => setFormData({ ...formData, classYear: e.target.value as ClassYear })}
-            className="glass-input w-full appearance-none bg-black"
+            className="glass-input w-full appearance-none"
           >
-            <option value={ClassYear.FR} className="bg-black">Freshman (FR)</option>
-            <option value={ClassYear.SO} className="bg-black">Sophomore (SO)</option>
-            <option value={ClassYear.JR} className="bg-black">Junior (JR)</option>
-            <option value={ClassYear.SR} className="bg-black">Senior (SR)</option>
-            <option value={ClassYear.HS} className="bg-black">High School (HS)</option>
+            <option value={ClassYear.FR}>Freshman (FR)</option>
+            <option value={ClassYear.SO}>Sophomore (SO)</option>
+            <option value={ClassYear.JR}>Junior (JR)</option>
+            <option value={ClassYear.SR}>Senior (SR)</option>
+            <option value={ClassYear.HS}>High School (HS)</option>
           </select>
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
           type="text"
           value={formData.time}
           onChange={e => setFormData({ ...formData, time: e.target.value })}
-          className="glass-input w-full font-mono text-white"
+          className="glass-input w-full font-mono text-[var(--text-primary)]"
           placeholder="00:00.00"
         />
       </div>

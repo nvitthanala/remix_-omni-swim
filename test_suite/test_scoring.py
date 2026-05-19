@@ -1,7 +1,7 @@
 import json, sys, io
 sys.path.insert(0, '.')
 from collections import defaultdict
-from point_calculator import calculate_points
+from utils.point_calculator import calculate_points
 
 # Load parsed data
 data = json.load(open('parsed_nsisc.json'))

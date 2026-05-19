@@ -1,86 +1,249 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
 :root {
-  --bg-deep: #05070a;
-  --bg-surface: #0c0f16;
-  --bg-aside: #080b11;
-  --text-primary: #e4e4e7;
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --bg: #11151a;
+  --surface: #1e242d;
+  --surface-strong: #232a36;
+  --surface-muted: #151a20;
+  --surface-rgb: 30, 36, 45;
+  --surface-strong-rgb: 35, 42, 54;
+  --surface-muted-rgb: 21, 26, 32;
+  --text-primary: #e5e8f0;
+  --text-secondary: #abb3c2;
+  --text-muted: #7b8592;
+  --text-accent: #f87171;
+  --accent: #8f95a1;
+  --accent-soft: #5f6876;
+  --border: #2c3340;
+  --border-soft: #363d4c;
+  --shadow: rgba(0, 0, 0, 0.28);
+  --focus: rgba(248, 113, 113, 0.24);
+}
+
+[data-theme='light'] {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-strong: #eef1f6;
+  --surface-muted: #f3f5f8;
+  --surface-rgb: 255, 255, 255;
+  --surface-strong-rgb: 238, 241, 246;
+  --surface-muted-rgb: 243, 245, 248;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
   --text-muted: #6b7280;
-  --neon-cyan: #22d3ee;
-  --border-dim: #1f2937;
-  --glass-white: rgba(255, 255, 255, 0.03);
+  --text-accent: #b91c1c;
+  --accent: #6b7280;
+  --accent-soft: #9ca3af;
+  --border: #d1d5db;
+  --border-soft: #e5e7eb;
+  --shadow: rgba(15, 23, 42, 0.08);
+  --focus: rgba(185, 28, 28, 0.16);
+}
+
+.surface-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.surface-card {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+
+.surface-muted-bg {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-soft);
+}
+
+.surface-overlay {
+  background: rgba(var(--surface-rgb), 0.08);
+}
+
+.surface-soft {
+  background: rgba(var(--surface-rgb), 0.22);
+}
+
+.text-theme-secondary {
+  color: var(--text-secondary);
+}
+
+.text-theme-muted {
+  color: var(--text-muted);
+}
+
+.border-theme {
+  border-color: var(--border);
+}
+
+.border-theme-soft {
+  border-color: var(--border-soft);
+}
+
+.bg-theme {
+  background: var(--bg);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background-color: var(--bg-deep);
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
   color: var(--text-primary);
   font-family: var(--font-sans);
+  font-weight: 400;
   overflow: hidden;
-  height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  background: var(--bg);
+  color: var(--text-primary);
+}
+
+.app-header,
+.app-footer,
+.workspace-sidebar,
+.sidebar-panel,
+.surface-card,
+.theme-panel {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.app-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-sidebar {
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border);
+}
+
+.main-content {
+  background: transparent;
+}
+
+.app-footer {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.text-display,
+.text-heading {
+  font-family: var(--font-sans);
+  font-weight: 700;
+}
+
+.text-body {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.text-meta,
+.theme-toggle-button {
+  color: var(--text-secondary);
+}
+
+.theme-toggle-button {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-button:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .neon-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-dim);
+  background: var(--surface-strong);
+  border: 1px solid var(--border-soft);
   border-left-width: 4px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border-left-color: var(--text-accent);
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .neon-card:hover {
-  background: rgba(12, 15, 22, 0.8);
-  border-color: rgba(31, 41, 55, 1);
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .glass-input {
-  background: #000;
-  border: 1px solid var(--border-dim);
-  color: white;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-soft);
+  color: var(--text-primary);
   padding: 0.6rem 0.8rem;
-  border-radius: 4px;
+  border-radius: 0.6rem;
   outline: none;
-  font-size: 0.875rem;
-  transition: all 0.2s;
+  font-size: 0.95rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .glass-input:focus {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 0 1px var(--neon-cyan);
+  border-color: var(--text-accent);
+  box-shadow: 0 0 0 4px var(--focus);
 }
 
 .btn-primary {
-  background: var(--neon-cyan);
-  color: black;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  background: var(--text-accent);
+  color: white;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
   padding: 0.75rem 1.5rem;
-  border-radius: 2px;
-  transition: all 0.2s;
+  border-radius: 0.75rem;
+  transition: filter 0.2s ease, box-shadow 0.2s ease;
   cursor: pointer;
   border: none;
 }
 
 .btn-primary:hover {
-  filter: brightness(1.1);
-  box-shadow: 0 0 15px rgba(34, 211, 238, 0.4);
+  filter: brightness(1.08);
+  box-shadow: 0 0 25px rgba(248, 113, 113, 0.18);
 }
 
 .mono-table {
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .label-caps {
-  font-size: 10px;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   color: var(--text-muted);
+}
+
+a,
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
 }
 

@@ -126,28 +126,28 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
     <div className="grid grid-cols-12 gap-6">
       <div className="col-span-8 space-y-6">
         {/* Performance Matrix: Chart Area */}
-        <div className="bg-[#0c0f16] border border-[#1f2937] rounded-lg p-5">
+        <div className="surface-card rounded-lg p-5">
           <div className="flex justify-between items-end mb-6">
             <div>
-              <h3 className="text-lg font-medium text-white uppercase tracking-tight">Performance Matrix: Overall Standing</h3>
-              <p className="text-xs text-gray-500">Current projection based on custom scoring model ({scoringSettingsObj.scoringPoints.slice(0, 3).join('-')}...)</p>
+              <h3 className="text-lg font-medium text-[var(--text-primary)] uppercase tracking-tight">Performance Matrix: Overall Standing</h3>
+              <p className="text-xs text-theme-secondary">Current projection based on custom scoring model ({scoringSettingsObj.scoringPoints.slice(0, 3).join('-')}...)</p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="flex items-center bg-black/40 border border-[#1f2937] rounded px-3 py-1.5 focus-within:border-cyan-500/50 transition-colors">
-                <Search size={12} className="text-gray-500 mr-2" />
+              <div className="flex items-center surface-overlay border border-theme-soft rounded px-3 py-1.5 focus-within:border-[var(--text-accent)]/50 transition-colors">
+                <Search size={12} className="text-theme-secondary mr-2" />
                 <input 
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Filter swimmer or team..."
-                  className="bg-transparent border-none outline-none text-[10px] uppercase placeholder:text-gray-500 text-white w-40"
+                  className="bg-transparent border-none outline-none text-[10px] uppercase placeholder:text-theme-secondary text-[var(--text-primary)] w-40"
                 />
               </div>
               <button 
                 onClick={() => setRemoveSeniors(!removeSeniors)}
                 className={`flex items-center gap-2 px-3 py-1.5 border rounded text-[10px] uppercase font-medium transition-all ${
                   removeSeniors 
-                    ? 'bg-rose-500/20 border-rose-500/50 text-rose-400' 
-                    : 'bg-[#131823] border-[#1f2937] text-gray-400 hover:text-white'
+                    ? 'bg-[var(--text-accent)]/20 border-[var(--text-accent)]/40 text-[var(--text-accent)]' 
+                    : 'surface-muted-bg border-theme-soft text-theme-secondary hover:text-[var(--text-primary)]'
                 }`}
                 title="Remove graduating seniors and simulate relay replacements"
               >
@@ -181,7 +181,7 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 />
               ))
             ) : (
-              <div className="p-12 text-center border border-dashed border-[#1f2937] rounded-lg text-gray-500">
+              <div className="p-12 text-center border border-dashed border-theme-soft rounded-lg text-theme-secondary">
                 <Users className="w-12 h-12 mx-auto mb-4 opacity-20" />
                 <p className="text-xs uppercase font-medium tracking-widest">No matrix data persistent</p>
               </div>
@@ -190,12 +190,12 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
         </div>
 
         {/* Individual Performance Breakdown Table */}
-        <div className="bg-[#0c0f16] border border-[#1f2937] rounded-lg overflow-hidden">
-          <div className="p-4 border-b border-[#1f2937] bg-black/20">
-            <h4 className="text-[10px] font-medium text-gray-500 uppercase tracking-widest">Top Individual Contributors</h4>
+        <div className="surface-card rounded-lg overflow-hidden">
+          <div className="p-4 border-b border-theme-soft surface-overlay">
+            <h4 className="text-[10px] font-medium text-theme-secondary uppercase tracking-widest">Top Individual Contributors</h4>
           </div>
           <table className="w-full text-left border-collapse">
-            <thead className="bg-black text-[10px] uppercase tracking-widest text-gray-500 font-medium">
+            <thead className="surface-overlay text-[10px] uppercase tracking-widest text-theme-secondary font-medium">
               <tr>
                 <th className="p-3">Rank</th>
                 <th className="p-3">Athlete Name</th>
@@ -207,12 +207,12 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
             <tbody className="text-xs font-mono">
               {topIndividuals.length > 0 ? (
                 topIndividuals.slice(0, 10).map((res, i) => (
-                  <tr key={res.id || i} className="border-b border-[#1f2937] hover:bg-white/5 transition-colors">
-                    <td className="p-3 text-gray-500">{i + 1}</td>
-                    <td className="p-3 font-sans font-medium text-white">{res.name}</td>
+                  <tr key={res.id || i} className="border-b border-theme-soft hover:bg-white/5 transition-colors">
+                    <td className="p-3 text-theme-secondary">{i + 1}</td>
+                    <td className="p-3 font-sans font-medium text-[var(--text-primary)]">{res.name}</td>
                     <td className="p-3">{res.team}</td>
-                    <td className="p-3"><span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">{res.classYear}</span></td>
-                    <td className="p-3 text-right text-cyan-400 font-medium">{typeof res.points === 'number' ? res.points.toFixed(1) : res.points}</td>
+                    <td className="p-3"><span className="px-1.5 py-0.5 rounded surface-overlay border border-theme-soft">{res.classYear}</span></td>
+                    <td className="p-3 text-right text-[var(--text-accent)] font-medium">{typeof res.points === 'number' ? res.points.toFixed(1) : res.points}</td>
                   </tr>
                 ))
               ) : (
@@ -227,32 +227,32 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
 
       {/* Right Column: Recruit Projection */}
       <div className="col-span-4 space-y-6">
-        <div className="bg-[#0c0f16] border border-[#1f2937] rounded-lg p-5">
-          <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-widest mb-4">Recruit Projection Matrix</h3>
+        <div className="surface-card rounded-lg p-5">
+          <h3 className="text-sm font-medium text-[var(--text-accent)] uppercase tracking-widest mb-4">Recruit Projection Matrix</h3>
           <RecruitForm 
             gender={gender} 
             teams={sortedTeams.map(t => t.teamName)} 
             onSubmit={handleAddRecruit} 
           />
           
-          <div className="mt-8 pt-6 border-t border-[#1f2937]">
-            <h4 className="text-[10px] font-medium text-gray-500 uppercase tracking-widest mb-3">Conversion Factors Applied</h4>
+          <div className="mt-8 pt-6 border-t border-theme-soft">
+            <h4 className="text-[10px] font-medium text-theme-secondary uppercase tracking-widest mb-3">Conversion Factors Applied</h4>
             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
-              <div className="flex justify-between bg-black/40 p-2 rounded border border-white/5">
-                <span className="text-gray-500">LCM 50/100</span>
-                <span className="text-cyan-400">0.873</span>
+              <div className="flex justify-between surface-overlay p-2 rounded border border-theme-soft">
+                <span className="text-theme-secondary">LCM 50/100</span>
+                <span className="text-[var(--text-accent)]">0.873</span>
               </div>
-              <div className="flex justify-between bg-black/40 p-2 rounded border border-white/5">
-                <span className="text-gray-500">LCM 400/500</span>
-                <span className="text-cyan-400">1.115</span>
+              <div className="flex justify-between surface-overlay p-2 rounded border border-theme-soft">
+                <span className="text-theme-secondary">LCM 400/500</span>
+                <span className="text-[var(--text-accent)]">1.115</span>
               </div>
-              <div className="flex justify-between bg-black/40 p-2 rounded border border-white/5">
-                <span className="text-gray-500">SCM Generic</span>
-                <span className="text-cyan-400">0.906</span>
+              <div className="flex justify-between surface-overlay p-2 rounded border border-theme-soft">
+                <span className="text-theme-secondary">SCM Generic</span>
+                <span className="text-[var(--text-accent)]">0.906</span>
               </div>
-              <div className="flex justify-between bg-black/40 p-2 rounded border border-white/5">
-                <span className="text-gray-500">SCM Mile</span>
-                <span className="text-cyan-400">1.013</span>
+              <div className="flex justify-between surface-overlay p-2 rounded border border-theme-soft">
+                <span className="text-theme-secondary">SCM Mile</span>
+                <span className="text-[var(--text-accent)]">1.013</span>
               </div>
             </div>
           </div>
