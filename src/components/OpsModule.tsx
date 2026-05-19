@@ -23,6 +23,8 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
   const [isAddingRecruit, setIsAddingRecruit] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [removeSeniors, setRemoveSeniors] = useState(false);
+  const [isParsingPdf, setIsParsingPdf] = useState(false);
+  const [pdfFormat, setPdfFormat] = useState('auto');
 
   // Filter results and recruits by gender
   const currentResults = gender === Gender.MEN ? workspace.menResults : workspace.womenResults;
@@ -52,6 +54,7 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
 
   events.forEach(event => {
     const eventResults = allResults.filter(r => r.event === event);
+    const isTimeTrial = eventResults.some(r => r.isTimeTrial);
     const scored = calculatePoints(eventResults, workspace.scoringSettings);
     
     scored.forEach(res => {
@@ -70,15 +73,17 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
       runningTotals[res.team] += pts;
     });
 
-    const timelinePoint: any = { 
-        name: event.replace(' Freestyle', ' Free').replace('Individual Medley', 'IM').replace('Backstroke', 'Back').replace('Breaststroke', 'Breast').replace('Butterfly', 'Fly').substring(0, 15), 
-        fullEvent: event 
-    };
-    Object.keys(runningTotals).forEach(team => {
-        timelinePoint[team] = runningTotals[team];
-    });
-    if (Object.keys(runningTotals).length > 0) {
-        timelineData.push(timelinePoint);
+    if (!isTimeTrial) {
+      const timelinePoint: any = { 
+          name: event.replace(' Freestyle', ' Free').replace('Individual Medley', 'IM').replace('Backstroke', 'Back').replace('Breaststroke', 'Breast').replace('Butterfly', 'Fly').substring(0, 15), 
+          fullEvent: event 
+      };
+      Object.keys(runningTotals).forEach(team => {
+          timelinePoint[team] = runningTotals[team];
+      });
+      if (Object.keys(runningTotals).length > 0) {
+          timelineData.push(timelinePoint);
+      }
     }
   });
 
@@ -113,26 +118,31 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
 
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const base64 = (event.target?.result as string).split(',')[1];
-      const res = await fetch('/api/parse-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64 }),
-      });
-      const data = await res.json();
-      
-      if (data.error) {
-        alert(data.error + '\n' + (data.details || ''));
-        return;
-      }
+      setIsParsingPdf(true);
+      try {
+        const base64 = (event.target?.result as string).split(',')[1];
+        const res = await fetch('/api/parse-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, format: pdfFormat }),
+        });
+        const data = await res.json();
+        
+        if (data.error) {
+          alert(data.error + '\n' + (data.details || ''));
+          return;
+        }
 
-      const parsedMen = data.results.filter((r: any) => r.gender === 'Men');
-      const parsedWomen = data.results.filter((r: any) => r.gender === 'Women');
-      
-      onUpdate({ 
-        menResults: [...workspace.menResults, ...parsedMen],
-        womenResults: [...workspace.womenResults, ...parsedWomen]
-      });
+        const parsedMen = data.results.filter((r: any) => r.gender === 'Men');
+        const parsedWomen = data.results.filter((r: any) => r.gender === 'Women');
+        
+        onUpdate({ 
+          menResults: [...workspace.menResults, ...parsedMen],
+          womenResults: [...workspace.womenResults, ...parsedWomen]
+        });
+      } finally {
+        setIsParsingPdf(false);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -208,11 +218,40 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 <UserMinus size={12} />
                 <span>- Class of SR</span>
               </button>
-              <label className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-rose-900/20 hover:bg-rose-900/40 border border-rose-400/30 rounded text-[10px] uppercase font-medium text-rose-400 transition-all">
-                <Plus size={12} />
-                <span>Load PDF Results</span>
-                <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} />
-              </label>
+              {isParsingPdf ? (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-rose-900/20 border border-rose-400/30 rounded text-[10px] uppercase font-medium text-rose-400">
+                  <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
+                    <Plus size={12} className="opacity-50" />
+                  </motion.div>
+                  <span>Parsing PDF...</span>
+                  <div className="w-16 h-1 bg-rose-900/50 rounded overflow-hidden ml-2">
+                    <motion.div 
+                      className="h-full bg-rose-400"
+                      initial={{ width: "0%" }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 15, ease: "easeOut" }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 border border-theme-soft rounded p-1">
+                  <select 
+                    value={pdfFormat}
+                    onChange={(e) => setPdfFormat(e.target.value)}
+                    className="bg-transparent text-[10px] uppercase tracking-widest text-theme-secondary outline-none py-1 pl-2 border-r border-theme-soft pr-2 cursor-pointer"
+                    title="PDF Column Format"
+                  >
+                    <option value="auto">Auto Format</option>
+                    <option value="regular">Regular List</option>
+                    <option value="divided">Divided (2-Col)</option>
+                  </select>
+                  <label className="cursor-pointer flex items-center gap-1.5 px-3 py-1 bg-rose-900/20 hover:bg-rose-900/40 border border-rose-400/30 rounded-sm text-[10px] uppercase font-medium text-rose-400 transition-all">
+                    <Plus size={12} />
+                    <span>Load PDF</span>
+                    <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} />
+                  </label>
+                </div>
+              )}
             </div>
           </div>
           

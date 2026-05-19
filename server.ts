@@ -59,26 +59,34 @@ async function runPythonScript(scriptPath: string, args: string[], stdin?: strin
     });
 
     if (stdin) {
+      // Handle stdin errors (e.g. write EOF when python process exits early)
+      proc.stdin.on('error', (err) => {
+        console.error('Python stdin error:', err.message);
+      });
       // Write stdin with proper backpressure handling to avoid "write EOF" errors
       // on large payloads.  This is critical because Node's pipe can overflow if the
       // Python process isn't ready to consume data immediately.
       const writeStdin = () => {
-        const canContinue = proc.stdin.write(stdin, 'utf-8', (writeErr) => {
-          if (writeErr) {
-            if (!resolved) {
-              resolved = true;
-              reject(new Error(`Failed to write to Python stdin: ${writeErr.message}`));
+        try {
+          const canContinue = proc.stdin.write(stdin, 'utf-8', (writeErr) => {
+            if (writeErr) {
+              if (!resolved) {
+                resolved = true;
+                reject(new Error(`Failed to write to Python stdin: ${writeErr.message}`));
+              }
+              return;
             }
-            return;
-          }
-          // After write completes successfully, end the stream.
-          proc.stdin.end();
-        });
-        if (!canContinue) {
-          // If the internal buffer is full, wait for drain event before ending.
-          proc.stdin.once('drain', () => {
+            // After write completes successfully, end the stream.
             proc.stdin.end();
           });
+          if (!canContinue) {
+            // If the internal buffer is full, wait for drain event before ending.
+            proc.stdin.once('drain', () => {
+              proc.stdin.end();
+            });
+          }
+        } catch (e) {
+          console.error('Error during proc.stdin.write:', e);
         }
       };
       // Use setImmediate to ensure the process event loop is ready before writing
@@ -180,7 +188,7 @@ async function startServer() {
     let responseSent = false;
 
     try {
-      const { base64 } = req.body;
+      const { base64, format } = req.body;
       if (!base64) {
         responseSent = true;
         return res.status(400).json({ error: 'No base64 PDF data provided' });
@@ -204,7 +212,7 @@ async function startServer() {
       // Run pdf parser
       let parserOutput;
       try {
-        parserOutput = await runPythonScript('pdf_parser.py', [tempFile]);
+        parserOutput = await runPythonScript('pdf_parser.py', [tempFile, format || 'auto']);
       } catch (err) {
         responseSent = true;
         return res.status(500).json({ error: 'PDF parsing failed', details: String(err) });

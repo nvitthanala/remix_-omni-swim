@@ -53,7 +53,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1.5">Athlete Name</label>
+        <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Athlete Name</label>
         <div className="grid grid-cols-2 gap-2">
           <input
             type="text"
@@ -74,7 +74,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
       
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1.5">Committed Team</label>
+          <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Committed Team</label>
           <select
             value={formData.team}
             onChange={e => setFormData({ ...formData, team: e.target.value })}
@@ -88,7 +88,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
           </select>
         </div>
         <div>
-          <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1.5">Course</label>
+          <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Course</label>
           <select
             value={formData.timeType}
             onChange={e => setFormData({ ...formData, timeType: e.target.value as any })}
@@ -102,7 +102,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
       </div>
 
       <div>
-        <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1.5">Event Selection</label>
+        <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Event Selection</label>
         <div className="grid grid-cols-2 gap-3">
           <select
             value={formData.event}
@@ -126,7 +126,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
       </div>
 
       <div>
-        <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1.5">Time Entry (Auto-Convert Enabled)</label>
+        <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Time Entry (Auto-Convert Enabled)</label>
         <input
           type="text"
           value={formData.time}

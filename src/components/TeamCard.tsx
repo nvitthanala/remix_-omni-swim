@@ -33,6 +33,13 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
   const [editingResultId, setEditingResultId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [viewMode, setViewMode] = useState<'swimmer'|'event'>('event');
+  const [sortMode, setSortMode] = useState<'chrono'|'eventDesc'|'eventAsc'|'swimmerDesc'|'swimmerAsc'>('eventDesc');
+  
+  // Custom Tooltip State
+  const [activeTooltip, setActiveTooltip] = useState<any>(null);
+  const [pinnedTooltip, setPinnedTooltip] = useState<any>(null);
+  const [activeClassTooltip, setActiveClassTooltip] = useState<any>(null);
+  const [pinnedClassTooltip, setPinnedClassTooltip] = useState<any>(null);
 
   // Group points by event and class
   const eventPointsMap: Record<string, number> = {};
@@ -43,7 +50,10 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
     { name: 'SR', points: 0, color: '#FFD700', swimmers: [] as SwimmerResult[] },
   ];
 
-  team.swimmers.forEach(s => {
+  // Filter out time trials from event map logic
+  const filteredSwimmers = team.swimmers.filter(s => !s.isTimeTrial);
+
+  filteredSwimmers.forEach(s => {
     if (!eventPointsMap[s.event]) eventPointsMap[s.event] = 0;
     eventPointsMap[s.event] += typeof s.points === 'number' ? s.points : 0;
     const entry = classData.find(d => d.name === s.classYear);
@@ -55,7 +65,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
 
   const eventData = Object.entries(eventPointsMap)
     .map(([name, points]) => {
-      const swimmers = team.swimmers.filter(s => s.event === name);
+      const swimmers = filteredSwimmers.filter(s => s.event === name);
       return { 
         name: name.replace(' Freestyle', ' Free').replace('Individual Medley', 'IM').replace('Backstroke', 'Back').replace('Breaststroke', 'Breast').replace('Butterfly', 'Fly').substring(0, 12), 
         fullEvent: name, 
@@ -64,6 +74,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
       };
     });
 
+  // Always sort chronological for the line chart if eventsList is provided
   if (eventsList.length > 0) {
     eventData.sort((a, b) => eventsList.indexOf(a.fullEvent) - eventsList.indexOf(b.fullEvent));
   } else {
@@ -72,7 +83,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
 
   // Group by swimmer for drill-down
   let topSwimmers = Object.values(
-    team.swimmers.reduce((acc, s) => {
+    filteredSwimmers.reduce((acc, s) => {
       if (!acc[s.name]) {
         acc[s.name] = { 
           name: s.name, 
@@ -94,7 +105,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
 
   // Group by event for drill-down
   let topEvents = Object.values(
-    team.swimmers.reduce((acc, s) => {
+    filteredSwimmers.reduce((acc, s) => {
       if (!acc[s.event]) {
         acc[s.event] = { 
           event: s.event, 
@@ -112,6 +123,95 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
     const lowerQ = searchQuery.toLowerCase();
     topEvents = topEvents.filter((e: any) => e.event.toLowerCase().includes(lowerQ));
   }
+
+  // Apply sorting suboptions
+  if (viewMode === 'swimmer') {
+    topSwimmers.sort((a, b) => sortMode === 'swimmerAsc' ? a.points - b.points : b.points - a.points);
+  } else {
+    if (sortMode === 'chrono' && eventsList.length > 0) {
+      topEvents.sort((a, b) => eventsList.indexOf(a.event) - eventsList.indexOf(b.event));
+    } else if (sortMode === 'eventAsc') {
+      topEvents.sort((a, b) => a.points - b.points);
+    } else {
+      topEvents.sort((a, b) => b.points - a.points); // eventDesc (default)
+    }
+  }
+
+  // Custom tooltips renderer logic to avoid recharts z-index and positioning issues
+  const renderTooltipContent = (data: any, isPinned = false, isClass = false) => {
+    let topPerformers: [string, number][] = [];
+    if (isClass && data.swimmers) {
+      const swimmerPts: Record<string, number> = {};
+      data.swimmers.forEach((s: SwimmerResult) => {
+        if (!swimmerPts[s.name]) swimmerPts[s.name] = 0;
+        swimmerPts[s.name] += typeof s.points === 'number' ? s.points : 0;
+      });
+      topPerformers = Object.entries(swimmerPts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8);
+    }
+
+    return (
+      <div 
+        className="bg-[#0c0f16] border border-gray-800 p-3 shadow-xl shadow-black/50 z-[999] pointer-events-auto h-full flex flex-col"
+        style={{ 
+          resize: isPinned ? 'both' : 'none', 
+          overflow: 'hidden',
+          minWidth: '220px',
+          minHeight: '120px',
+          containerType: 'size', // Container queries for dynamic resizing
+        }}
+      >
+        {isPinned && (
+          <div className="absolute top-1 right-1 cursor-pointer text-gray-500 hover:text-white" onClick={() => isClass ? setPinnedClassTooltip(null) : setPinnedTooltip(null)}>
+            ✕
+          </div>
+        )}
+        <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-800 shrink-0">
+          <h4 className="font-bold text-rose-400 uppercase tracking-widest" style={{ fontSize: 'clamp(8px, 5cqi, 12px)' }}>
+            {isClass ? `Class of ${data.name}` : data.fullEvent}
+          </h4>
+          <span className="font-mono font-black" style={{ fontSize: 'clamp(9px, 6cqi, 14px)' }}>{data.points.toFixed(1)} PTS</span>
+        </div>
+        
+        <div className="space-y-1 mt-2 flex-1 overflow-y-auto custom-scrollbar">
+          {isClass ? (
+            <>
+              <div className="text-gray-500 font-bold uppercase mb-1" style={{ fontSize: 'clamp(7px, 4cqi, 10px)' }}>Top Performers</div>
+              {topPerformers.length > 0 ? topPerformers.map(([name, pts], idx) => (
+                <div key={idx} className="flex items-center justify-between py-0.5 border-b border-gray-800/30 last:border-0 swimmer-row" style={{ fontSize: 'clamp(8px, 4.5cqi, 11px)' }}>
+                  <span className="font-medium text-gray-200 truncate pr-2 max-w-[150px]">{name}</span>
+                  <span className="font-mono text-emerald-400 font-bold">{pts.toFixed(1)}</span>
+                </div>
+              )) : (
+                <div className="text-gray-500 text-[9px] italic">No scoring swimmers</div>
+              )}
+            </>
+          ) : (
+            data.swimmers && data.swimmers.length > 0 ? data.swimmers.map((s: any, idx: number) => (
+              <div key={idx} className="flex items-center justify-between py-1 border-b border-gray-800/50 last:border-0 swimmer-row" style={{ fontSize: 'clamp(7px, 4.5cqi, 11px)' }}>
+                <div className="flex items-center gap-2">
+                  <span className="w-4 font-mono text-gray-500">{s.rank || '-'}</span>
+                  {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
+                  {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
+                  {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
+                  <span className="font-medium text-gray-200 truncate max-w-[120px]">{s.name}</span>
+                  {s.cutline_achieved && <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1 rounded ml-1">CUT</span>}
+                </div>
+                <div className="flex gap-3 text-right">
+                  <span className="font-mono text-gray-500">{s.prelimsTime ? `P:${s.prelimsTime}` : ''}</span>
+                  <span className="font-mono text-gray-300">{s.finalsTime ? `F:${s.finalsTime}` : s.time}</span>
+                  <span className="font-mono text-emerald-400 font-bold">{typeof s.points === 'number' ? s.points.toFixed(1) : s.points}</span>
+                </div>
+              </div>
+            )) : (
+              <div className="text-gray-500 text-[9px] italic">No scoring swimmers</div>
+            )
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={`neon-card rounded-md overflow-hidden mb-4`} style={{ borderLeftColor: team.color }}>
@@ -155,107 +255,138 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                 
                 <div className="space-y-4">
                   {/* Event Chart */}
-                  <div className="h-48 w-full surface-overlay p-2 rounded border border-theme-soft">
+                  <div className="h-48 w-full surface-overlay p-2 rounded border border-theme-soft relative group/chart">
+                    {/* Hover Tooltip (Absolute relative to chart) */}
+                    {!pinnedTooltip && activeTooltip && (
+                      <div 
+                        className="absolute pointer-events-none rounded-lg overflow-hidden transition-all duration-100"
+                        style={{ 
+                          left: `${Math.min(Math.max(10, activeTooltip.x - 125), activeTooltip.containerWidth - 260)}px`, 
+                          top: `${Math.max(10, activeTooltip.y - 140)}px`,
+                          width: '250px',
+                          zIndex: 999 
+                        }}
+                      >
+                        {renderTooltipContent(activeTooltip.payload)}
+                      </div>
+                    )}
+                    
+                    {/* Pinned Tooltip (Draggable, Resizable) */}
+                    {pinnedTooltip && (
+                      <motion.div 
+                        drag
+                        dragConstraints={{ left: -100, right: 300, top: -50, bottom: 200 }}
+                        className="absolute z-[1000] rounded-lg shadow-2xl shadow-black/80 overflow-hidden"
+                        style={{ 
+                          left: `${Math.min(Math.max(10, pinnedTooltip.x - 125), pinnedTooltip.containerWidth - 260)}px`, 
+                          top: `${Math.max(10, pinnedTooltip.y - 140)}px`
+                        }}
+                      >
+                        {renderTooltipContent(pinnedTooltip.payload, true)}
+                      </motion.div>
+                    )}
+
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={eventData}>
+                      <LineChart data={eventData} onMouseLeave={() => setActiveTooltip(null)}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                         <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 8, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} interval="preserveStartEnd" />
-                        <YAxis hide domain={['auto', 'auto']} />
-                        <Tooltip 
-                          cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 2 }}
-                          contentStyle={{ background: '#0c0f16', border: '1px solid #1f2937', fontSize: '10px', color: '#fff', borderRadius: '8px', padding: '10px', minWidth: '250px' }}
-                          content={({ active, payload, label }) => {
-                            if (active && payload && payload.length) {
-                              const data = payload[0].payload;
-                              return (
-                                <div className="bg-[#0c0f16] border border-gray-800 p-3 rounded-lg shadow-xl shadow-black/50 z-50 pointer-events-auto">
-                                  <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-800">
-                                    <h4 className="font-bold text-rose-400 uppercase tracking-widest text-[11px]">{data.fullEvent}</h4>
-                                    <span className="font-mono font-black text-[12px]">{data.points.toFixed(1)} PTS</span>
-                                  </div>
-                                  <div className="space-y-1 mt-2">
-                                    {data.swimmers && data.swimmers.length > 0 ? data.swimmers.map((s: any, idx: number) => (
-                                      <div key={idx} className="flex items-center justify-between text-[9px] py-1 border-b border-gray-800/50 last:border-0">
-                                        <div className="flex items-center gap-2">
-                                          <span className="w-4 font-mono text-gray-500">{s.rank || '-'}</span>
-                                          {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
-                                          {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
-                                          {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
-                                          <span className="font-medium text-gray-200">{s.name}</span>
-                                          {s.cutline_achieved && <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1 rounded ml-1">CUT</span>}
-                                        </div>
-                                        <div className="flex gap-3 text-right">
-                                          <span className="font-mono text-gray-500 w-12">{s.prelimsTime ? `P:${s.prelimsTime}` : ''}</span>
-                                          <span className="font-mono text-gray-300 w-12">{s.finalsTime ? `F:${s.finalsTime}` : s.time}</span>
-                                          <span className="font-mono text-emerald-400 font-bold w-6">{typeof s.points === 'number' ? s.points.toFixed(1) : s.points}</span>
-                                        </div>
-                                      </div>
-                                    )) : (
-                                      <div className="text-gray-500 text-[9px] italic">No scoring swimmers</div>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return null;
-                          }}
-                        />
+                        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 8, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} width={30} />
+                        {/* We use a hidden tooltip just to ensure chart layout behaves, but disable its rendering */}
+                        <Tooltip content={<></>} cursor={{ stroke: 'rgba(255,255,255,0.05)', strokeWidth: 1 }} />
                         <Line 
                           type="monotone" 
                           dataKey="points" 
                           stroke="#F43F5E" 
                           strokeWidth={2} 
                           dot={{ r: 4, fill: '#0c0f16', stroke: '#F43F5E', strokeWidth: 2 }} 
-                          activeDot={{ r: 6, fill: '#F43F5E', stroke: '#fff', strokeWidth: 2, onClick: (e, payload) => console.log('pinned', payload) }}
+                          activeDot={(props: any) => {
+                            const { cx, cy, payload } = props;
+                            return (
+                              <g>
+                                <circle cx={cx} cy={cy} r={6} fill="#F43F5E" stroke="#fff" strokeWidth={2} />
+                                <circle 
+                                  cx={cx} cy={cy} r={20} fill="transparent"
+                                  style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                                  onMouseEnter={(e) => {
+                                    const rect = (e.target as Element).closest('.recharts-wrapper')?.getBoundingClientRect();
+                                    setActiveTooltip({ x: cx, y: cy, payload, containerWidth: rect?.width || 500 });
+                                  }}
+                                  onMouseLeave={() => setActiveTooltip(null)}
+                                  onClick={(e) => {
+                                    const rect = (e.target as Element).closest('.recharts-wrapper')?.getBoundingClientRect();
+                                    setPinnedTooltip({ x: cx, y: cy, payload, containerWidth: rect?.width || 500 });
+                                    setActiveTooltip(null);
+                                  }}
+                                />
+                              </g>
+                            );
+                          }}
                         />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
 
                   {/* Class Chart */}
-                  <div className="h-40 w-full surface-overlay p-2 rounded border border-theme-soft">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={classData}>
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} />
-                        <Tooltip 
-                          cursor={{ fill: 'rgba(255,255,255,0.03)' }} 
-                          content={({ active, payload }) => {
-                            if (active && payload && payload.length) {
-                              const data = payload[0].payload;
-                              // Aggregate points by swimmer for the class
-                              const swimmerPts: Record<string, number> = {};
-                              data.swimmers.forEach((s: SwimmerResult) => {
-                                if (!swimmerPts[s.name]) swimmerPts[s.name] = 0;
-                                swimmerPts[s.name] += typeof s.points === 'number' ? s.points : 0;
-                              });
-                              const topPerformers = Object.entries(swimmerPts)
-                                .sort((a, b) => b[1] - a[1])
-                                .slice(0, 5);
+                  <div className="h-40 w-full surface-overlay p-2 rounded border border-theme-soft relative group/chart">
+                    {/* Hover Tooltip (Absolute relative to chart) */}
+                    {!pinnedClassTooltip && activeClassTooltip && (
+                      <div 
+                        className="absolute pointer-events-none rounded-lg overflow-hidden transition-all duration-100"
+                        style={{ 
+                          left: `${Math.min(Math.max(10, activeClassTooltip.x - 110), activeClassTooltip.containerWidth - 230)}px`, 
+                          top: `${Math.max(10, activeClassTooltip.y - 120)}px`,
+                          width: '220px',
+                          zIndex: 999 
+                        }}
+                      >
+                        {renderTooltipContent(activeClassTooltip.payload, false, true)}
+                      </div>
+                    )}
+                    
+                    {/* Pinned Tooltip (Draggable, Resizable) */}
+                    {pinnedClassTooltip && (
+                      <motion.div 
+                        drag
+                        dragConstraints={{ left: -100, right: 300, top: -100, bottom: 200 }}
+                        className="absolute z-[1000] rounded-lg shadow-2xl shadow-black/80 overflow-hidden"
+                        style={{ 
+                          left: `${Math.min(Math.max(10, pinnedClassTooltip.x - 110), pinnedClassTooltip.containerWidth - 230)}px`, 
+                          top: `${Math.max(10, pinnedClassTooltip.y - 120)}px`
+                        }}
+                      >
+                        {renderTooltipContent(pinnedClassTooltip.payload, true, true)}
+                      </motion.div>
+                    )}
 
-                              return (
-                                <div className="bg-[#0c0f16] border border-gray-800 p-3 rounded-lg shadow-xl shadow-black/50 z-50 pointer-events-auto min-w-[200px]">
-                                  <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-800">
-                                    <h4 className="font-bold text-rose-400 uppercase tracking-widest text-[11px]">Class of {data.name}</h4>
-                                    <span className="font-mono font-black text-[12px]">{data.points.toFixed(1)} PTS</span>
-                                  </div>
-                                  <div className="space-y-1 mt-2">
-                                    <div className="text-[9px] text-gray-500 font-bold uppercase mb-1">Top Performers</div>
-                                    {topPerformers.length > 0 ? topPerformers.map(([name, pts], idx) => (
-                                      <div key={idx} className="flex items-center justify-between text-[10px] py-0.5 border-b border-gray-800/30 last:border-0">
-                                        <span className="font-medium text-gray-200 truncate pr-2">{name}</span>
-                                        <span className="font-mono text-emerald-400 font-bold">{pts.toFixed(1)}</span>
-                                      </div>
-                                    )) : (
-                                      <div className="text-gray-500 text-[9px] italic">No scoring swimmers</div>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return null;
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={classData} onMouseLeave={() => setActiveClassTooltip(null)}>
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} />
+                        <Tooltip content={<></>} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+                        <Bar 
+                          dataKey="points" 
+                          radius={[2, 2, 0, 0]}
+                          onClick={(data, index, e) => {
+                            const rect = (e.target as Element).closest('.recharts-wrapper')?.getBoundingClientRect();
+                            setPinnedClassTooltip({ 
+                              x: (e as any).clientX - (rect?.left || 0), 
+                              y: (e as any).clientY - (rect?.top || 0), 
+                              payload: data, 
+                              containerWidth: rect?.width || 500 
+                            });
+                            setActiveClassTooltip(null);
                           }}
-                        />
-                        <Bar dataKey="points" radius={[2, 2, 0, 0]}>
+                          onMouseEnter={(data, index, e) => {
+                            const rect = (e.target as Element).closest('.recharts-wrapper')?.getBoundingClientRect();
+                            setActiveClassTooltip({ 
+                              x: (e as any).clientX - (rect?.left || 0), 
+                              y: (e as any).clientY - (rect?.top || 0), 
+                              payload: data, 
+                              containerWidth: rect?.width || 500 
+                            });
+                          }}
+                          onMouseLeave={() => setActiveClassTooltip(null)}
+                          style={{ cursor: 'pointer' }}
+                        >
                           {classData.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} opacity={0.8} />
                           ))}
@@ -278,19 +409,33 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                     <List size={14} className="text-rose-400" />
                     <span className="text-[10px] font-medium uppercase tracking-widest text-theme-secondary">Team Matrix</span>
                   </div>
-                  <div className="flex items-center surface-overlay border border-theme-soft rounded p-0.5">
-                    <button 
-                      onClick={() => setViewMode('event')}
-                      className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${viewMode === 'event' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
+                  <div className="flex items-center gap-2">
+                    <select 
+                      className="bg-[#0c0f16] border border-theme-soft text-[9px] uppercase tracking-widest text-theme-secondary rounded p-1 outline-none"
+                      value={sortMode}
+                      onChange={(e) => setSortMode(e.target.value as any)}
                     >
-                      By Event
-                    </button>
-                    <button 
-                      onClick={() => setViewMode('swimmer')}
-                      className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${viewMode === 'swimmer' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
-                    >
-                      By Swimmer
-                    </button>
+                      {viewMode === 'event' && <option value="chrono">Chronological</option>}
+                      {viewMode === 'event' && <option value="eventDesc">High to Low</option>}
+                      {viewMode === 'event' && <option value="eventAsc">Low to High</option>}
+                      {viewMode === 'swimmer' && <option value="swimmerDesc">High to Low</option>}
+                      {viewMode === 'swimmer' && <option value="swimmerAsc">Low to High</option>}
+                    </select>
+
+                    <div className="flex items-center surface-overlay border border-theme-soft rounded p-0.5">
+                      <button 
+                        onClick={() => { setViewMode('event'); setSortMode('eventDesc'); }}
+                        className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${viewMode === 'event' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
+                      >
+                        By Event
+                      </button>
+                      <button 
+                        onClick={() => { setViewMode('swimmer'); setSortMode('swimmerDesc'); }}
+                        className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${viewMode === 'swimmer' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
+                      >
+                        By Swimmer
+                      </button>
+                    </div>
                   </div>
                 </div>
 

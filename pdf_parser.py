@@ -7,7 +7,7 @@ import difflib
 def is_time(s):
     """Check if string is a swimming time"""
     s = s.strip().rstrip('.')
-    cleaned = re.sub(r'[#\*&$%^!@~\']', '', s).strip()
+    cleaned = re.sub(r'[#\*&$%^!@~\'\+\-qQjJ]', '', s).strip()
     if re.match(r'^\d*:?\d{1,2}\.\d{2}[a-zA-Z\s]*$', cleaned, re.IGNORECASE):
         return True
     return False
@@ -20,7 +20,7 @@ def clean_time_str(s):
         is_exh = True
         s = s[1:].strip()
     # Strip trailing non-numeric chars like #, *, etc.
-    s = re.sub(r'[#\*&$%^!@~\']', '', s).strip()
+    s = re.sub(r'[#\*&$%^!@~\'\+\-qQjJ]', '', s).strip()
     return s, is_exh
 
 YEAR_TOKENS = {'FR', 'SO', 'JR', 'SR', '5Y', 'FY', 'GS', 'GR'}
@@ -166,8 +166,8 @@ def detect_meet_type(full_text):
         return 'ACC'  # Names are "Last, First"
     return 'NSISC'  # Names are "First Last"
 
-def parse_nsisc(lines):
-    """Parse NSISC/D2 format: Rank Name YR School PrelimTime FinalsTime QualCodes"""
+def parse_meet_data(lines, conference="NSISC"):
+    """Parse generic meet format: Rank Name YR School PrelimTime FinalsTime QualCodes"""
     athletes = {}
     current_event = None
     current_gender = None
@@ -232,7 +232,7 @@ def parse_nsisc(lines):
             # For relays, use relay-aware filter
             if not is_data_line_text(stripped, is_relay_event=True):
                 continue
-            _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes)
+            _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes, conference)
             continue
         
         # ===== INDIVIDUAL Athlete Lines =====
@@ -264,26 +264,20 @@ def parse_nsisc(lines):
         before_yr = rest_line[:yr_match.start()].strip()
         after_yr = rest_line[yr_match.end():].strip()
         
-        # DETECT FORMAT: Check if before_yr starts with a rank number
-        # Heat event format: "Rank Name YR School ...Times..."
-        # Timed-final format: "School YR Name ...Times..."
-        # The key difference: in heat events, before_yr starts with a number (rank+name)
-        # In timed finals, before_yr is the school name (no leading number)
-        
         rank = None
         name = None
         school = None
         prelims_time = None
         finals_time = None
         
-        # Check if before_yr has a rank number at the start
         has_rank = re.match(r'^(\d+|\*?\d+)\s+', before_yr)
+        has_comma_before = ',' in before_yr
+        has_comma_after = ',' in after_yr
         
-        if has_rank or not is_timed_final_event:
+        # If before_yr has a comma, it must contain "Last, First", meaning format is "Rank Name YR School"
+        # If it doesn't have a comma, we fall back to rank detection or timed final logic
+        if has_comma_before or has_rank or not is_timed_final_event:
             # === HEAT EVENT FORMAT: Rank Name YR School ... ===
-            # Example: "1 Colin Candebat SO Henderson State University 1:50.13 1:46.74"
-            # Example: "--- Eli Westbrook JR Henderson State University 1:59.29 X1:56.89"
-            
             rank_match = re.match(r'^(\d+|\*?\d+)\s+(.*)', before_yr)
             if rank_match:
                 rank_str = rank_match.group(1).strip().lstrip('*')
@@ -293,6 +287,14 @@ def parse_nsisc(lines):
             else:
                 name_raw = before_yr
             
+            # Extract optional HyTek name markers (*, #, %, x)
+            marker_match = re.match(r'^([\*xX#%])\s*(.*)', name_raw)
+            if marker_match:
+                marker = marker_match.group(1).upper()
+                if marker == 'X':
+                    is_exhibition = True
+                name_raw = marker_match.group(2).strip()
+            
             name = normalize_name(name_raw)
             if not name:
                 continue
@@ -300,7 +302,6 @@ def parse_nsisc(lines):
             # After year: School Name ... Times ...
             all_tokens = after_yr.split()
             
-            # Find the boundary between school words and time tokens
             school_words = []
             time_part_tokens = []
             in_times = False
@@ -323,16 +324,9 @@ def parse_nsisc(lines):
             
         else:
             # === TIMED-FINAL FORMAT: School YR Name ... Times ... ===
-            # Example: "University of West Florida JR Riley MacVane 10:09.67 25D2 10:15.87 1"
-            # before_yr = "University of West Florida" (the school)
-            # after_yr = "Riley MacVane 10:09.67 25D2 10:15.87 1" (Name Times ...)
-            
-            school_raw = before_yr  # before_yr IS the school name
-            
-            # After year: Name ... Times ...
+            school_raw = before_yr
             all_tokens = after_yr.split()
             
-            # Find the boundary between name words and time tokens
             name_words = []
             time_part_tokens = []
             in_times = False
@@ -347,7 +341,15 @@ def parse_nsisc(lines):
                     else:
                         name_words.append(t)
             
-            name = normalize_name(' '.join(name_words))
+            name_raw = ' '.join(name_words)
+            marker_match = re.match(r'^([\*xX#%])\s*(.*)', name_raw)
+            if marker_match:
+                marker = marker_match.group(1).upper()
+                if marker == 'X':
+                    is_exhibition = True
+                name_raw = marker_match.group(2).strip()
+
+            name = normalize_name(name_raw)
             if not name:
                 continue
         
@@ -402,7 +404,7 @@ def parse_nsisc(lines):
                 "round_swam": current_round, "is_exhibition": is_exhibition,
                 "is_time_trial": current_event_is_time_trial,
                 "rank": rank,
-                "conference": "NSISC"
+                "conference": conference
             }
         else:
             ath = athletes[key]
@@ -419,7 +421,7 @@ def parse_nsisc(lines):
     
     return athletes
 
-def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes):
+def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes, conference="NSISC"):
     """Parse NSISC relay line"""
     # Example: "University of West Florida 7:25.38 D2 B	7:29.39	1"
     # In pdfplumber text: "University of West Florida 7:25.38 D2 B 7:29.39 1"
@@ -475,11 +477,14 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
         if not nxt:
             continue
         # Swimmer line: "1) Shannah Dillman SR 2) Tori Johnston SR ..."
-        swimmers = re.findall(r'(\d+)\)\s*([A-Za-z\-\',\.\s]+?)\s+(FR|SO|JR|SR|5Y|FY|GS|GR)', nxt)
+        # Handle optional reaction times like r:0.12 or r:+0.55
+        swimmers = re.findall(r'(\d+)\)\s*(?:r:[\+\-]?\d*\.\d+\s+)?([A-Za-z\-\',\.\s\*#xX%]+?)\s+(FR|SO|JR|SR|5Y|FY|GS|GR)', nxt)
         if swimmers:
             for num, sname, syear in swimmers:
-                sname = normalize_name(sname)
-                relay_names.append({"name": sname, "year": syear.upper()})
+                # Strip HyTek markers from relay names too
+                sname_clean = re.sub(r'^[\*xX#%]\s*', '', sname.strip())
+                sname_clean = normalize_name(sname_clean)
+                relay_names.append({"name": sname_clean, "year": syear.upper()})
         elif re.match(r'^[\d:\.]+\s', nxt) and '(' in nxt:
             continue  # Split times
         elif nxt.startswith('r:') or nxt.startswith('DQ') or nxt.upper().startswith('EARLY TAKE-OFF'):
@@ -498,141 +503,8 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
                 "is_time_trial": current_event_is_time_trial,
                 "rank": rank,
                 "relay_names": relay_names,
-                "conference": "NSISC"
+                "conference": conference
             }
-
-
-def parse_acc(lines):
-    """Parse ACC format: School YR Last, First Score DD PrelimScore Points"""
-    athletes = {}
-    current_event = None
-    current_gender = None
-    current_round = "Finals"
-    current_event_is_time_trial = False
-    
-    for line_idx, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        
-        upper = stripped.upper()
-        
-        # Event headers
-        event_match = re.match(r'^Event\s+(\d+)\s+(Men|Women|Boys?|Girls?|Mixed|Coed|Men\'s|Women\'s)[\'sS]?\s+(.*)', stripped, re.IGNORECASE)
-        if event_match:
-            event_num = int(event_match.group(1))
-            gender_str = event_match.group(2).lower()
-            current_gender = "Women" if any(x in gender_str for x in ["women", "girls"]) else "Men"
-            event_name = event_match.group(3).strip()
-            current_event = f"Event {event_num} {current_gender} {event_name}"
-            current_event_is_time_trial = 'TIME TRIAL' in event_name.upper()
-            current_round = "Time Trial" if current_event_is_time_trial else "Finals"
-            continue
-        
-        if not current_event:
-            continue
-        
-        # Round changes
-        if upper.startswith('PRELIMINARIES') or upper == 'PRELIMS':
-            current_round = "Preliminaries"
-            continue
-        if upper == 'FINALS':
-            current_round = "Finals"
-            continue
-        if any(x in upper for x in ['A - FINAL', 'A FINAL', 'CHAMPIONSHIP FINAL']):
-            current_round = "A Final"
-            continue
-        if any(x in upper for x in ['B - FINAL', 'B FINAL', 'CONSOLATION FINAL']):
-            current_round = "B Final"
-            continue
-        if any(x in upper for x in ['C - FINAL', 'C FINAL', 'BONUS FINAL']):
-            current_round = "C Final"
-            continue
-        
-        # Skip non-data
-        skip_flags = ['RECORD:', 'MEET:', 'CONF:', 'POOL:', 'NCAA', 'HY-TEK',
-                      'SEED TIME', '-- ', 'PAGE', 'EARLY TAKE-OFF',
-                      'CONSIDERATION', 'AUTOMATIC QUAL', 'CHAMPION:',
-                      'USOP', 'AMER', 'TEAM RELAY', 'YR', 'SCHOOL',
-                      'PRELIM SCORE', 'FINALS SCORE', 'POINTS',
-                      'WOMEN - TEAM SCORES', 'MEN - TEAM SCORES', 'TEAM RANKINGS']
-        if any(x in upper for x in skip_flags):
-            continue
-        
-        # Skip split time lines
-        if re.match(r'^[\d\.:]+\s', stripped) and '(' in stripped:
-            continue
-        
-        if stripped.startswith('r:') or stripped.startswith('r +'):
-            continue
-        
-        is_relay = "relay" in current_event.lower()
-        
-        if is_relay:
-            # ACC relays have a different format - skip for now
-            continue
-        
-        # ACC format: "School YR Last, First Score DD PrelimScore Rank"
-        # Example: "Southern Methodist University SO Sitz, Luke 429.75 32 387.20 1"
-        # The year comes right after the school, then the name with comma
-        
-        yr_match = re.search(YEAR_PATTERN, stripped)
-        if not yr_match:
-            continue
-        
-        yr = yr_match.group(1).upper()
-        before_yr = stripped[:yr_match.start()].strip()
-        after_yr = stripped[yr_match.end():].strip()
-        
-        # before_yr is the school name (e.g., "Southern Methodist University")
-        school_raw = before_yr
-        
-        # after_yr contains: "Last, First Score DD PrelimScore Rank"
-        # Example: "Sitz, Luke 429.75 32 387.20 1"
-        
-        # Find the comma-separated name
-        name_match = re.match(r'\s*([A-Za-z\-\']+,\s*[A-Za-z\.\-\s]+?)\s+(\d+[\.\d]*)\s+(\d+)\s+([\d\.]+)\s+(\d+|\*?\d+)', after_yr)
-        if not name_match:
-            # Try without points: "Sitz, Luke 429.75 387.20 1"
-            name_match = re.match(r'\s*([A-Za-z\-\']+,\s*[A-Za-z\.\-\s]+?)\s+(\d+[\.\d]*)\s+(\d+[\.\d]*)\s+(\d+|\*?\d+)', after_yr)
-            if not name_match:
-                continue
-            name_str = name_match.group(1)
-            finals_val = name_match.group(2)
-            prelim_val = name_match.group(3)
-            rank_str = name_match.group(4)
-        else:
-            name_str = name_match.group(1)
-            finals_val = name_match.group(2)
-            points_val = name_match.group(3)
-            prelim_val = name_match.group(4)
-            rank_str = name_match.group(5)
-        
-        name = normalize_name(name_str)
-        rank = rank_str.lstrip('*') if rank_str.isdigit() or rank_str.lstrip('*').isdigit() else None
-        
-        # Match school
-        school = match_abbrev_team(school_raw)
-        if not school:
-            school = _fuzzy_match_team(school_raw)
-        if not school:
-            continue
-        
-        is_exhibition = (rank_str == '---' or rank_str == 'SCR')
-        
-        key = (name, current_event, current_gender)
-        if key not in athletes:
-            athletes[key] = {
-                "name": name, "event": current_event, "gender": current_gender,
-                "team": school, "year": yr, "is_relay": False,
-                "prelims_time": prelim_val, "finals_time": finals_val,
-                "round_swam": current_round, "is_exhibition": is_exhibition,
-                "is_time_trial": current_event_is_time_trial,
-                "rank": rank,
-                "conference": "ACC"
-            }
-    
-    return athletes
 
 
 _team_cache = None
@@ -656,12 +528,17 @@ def _build_team_cache(lines):
         if not is_data_line_text(stripped):
             continue
         
-        yr_match = re.search(YEAR_PATTERN, stripped)
+        # Strip exhibition markers and rank digits for accurate team caching
+        stripped_clean = re.sub(r'^---\s*', '', stripped)
+        stripped_clean = re.sub(r'^\d+\)\s*', '', stripped_clean)
+        stripped_clean = re.sub(r'^(\d+|\*?\d+)\s+', '', stripped_clean)
+        
+        yr_match = re.search(YEAR_PATTERN, stripped_clean)
         if not yr_match:
             continue
         
-        before_yr = stripped[:yr_match.start()].strip()
-        after_yr = stripped[yr_match.end():].strip()
+        before_yr = stripped_clean[:yr_match.start()].strip()
+        after_yr = stripped_clean[yr_match.end():].strip()
         
         # The school can be before or after the year depending on format
         # Try both
@@ -671,8 +548,8 @@ def _build_team_cache(lines):
             for i in range(len(words), 0, -1):
                 part = ' '.join(words[:i])
                 if len(part) > 3 and not is_time(part):
-                    # Check it doesn't look like a name
-                    if not re.match(r'^[A-Z][a-z]+,\s*[A-Z]', part):
+                    # Check it doesn't look like a name (unless it contains College/University)
+                    if not re.match(r'^[A-Z][a-z]+,\s*[A-Z]', part) or 'University' in part or 'College' in part:
                         team_candidates.add(part)
     
     # Normalize
@@ -736,10 +613,34 @@ def _fuzzy_match_team(candidate):
     return None
 
 
-def parse_pdf(file_path):
-    with pdfplumber.open(file_path) as pdf:
-        full_text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+def extract_page_text(args):
+    path, i, format_type = args
+    import pdfplumber
+    with pdfplumber.open(path) as pdf:
+        page = pdf.pages[i]
+        if format_type == 'divided':
+            width = page.width
+            height = page.height
+            left_bbox = (0, 0, width / 2, height)
+            right_bbox = (width / 2, 0, width, height)
+            
+            left_text = page.within_bbox(left_bbox).extract_text() or ""
+            right_text = page.within_bbox(right_bbox).extract_text() or ""
+            return left_text + "\n" + right_text
+        return page.extract_text() or ""
+
+def parse_pdf(file_path, format_type='auto'):
+    from concurrent.futures import ProcessPoolExecutor
     
+    with pdfplumber.open(file_path) as pdf:
+        num_pages = len(pdf.pages)
+    
+    page_texts = []
+    with ProcessPoolExecutor() as executor:
+        results = executor.map(extract_page_text, [(file_path, i, format_type) for i in range(num_pages)])
+        page_texts = list(results)
+        
+    full_text = "\n".join([pt for pt in page_texts if pt])
     lines = full_text.split('\n')
     
     # Build team cache first
@@ -755,10 +656,7 @@ def parse_pdf(file_path):
     meet_type = detect_meet_type(full_text)
     
     # Parse based on format
-    if meet_type == 'ACC' or conference == 'ACC':
-        athletes = parse_acc(lines)
-    else:
-        athletes = parse_nsisc(lines)
+    athletes = parse_meet_data(lines, conference=conference or "NSISC")
     
     # Build results
     results = []
@@ -791,4 +689,5 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No file path provided"}))
         sys.exit(1)
-    parse_pdf(sys.argv[1])
+    format_type = sys.argv[2] if len(sys.argv) > 2 else 'auto'
+    parse_pdf(sys.argv[1], format_type)

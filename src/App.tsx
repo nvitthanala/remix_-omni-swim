@@ -372,7 +372,7 @@ export default function App() {
 
       {showSettingsParamsManager && activeWorkspace && (
         <ScoringSettingsModal 
-          settings={activeWorkspace.scoringSettings || { scoringPoints: [20,17,16,15,14,13,12,11,9,7,6,5,4,3,2,1], relayMultiplier: 2, halfRateRelaySwimmer: true }}
+          settings={activeWorkspace.scoringSettings || { scoringPoints: [20,17,16,15,14,13,12,11,9,7,6,5,4,3,2,1], relayMultiplier: 2, halfRateRelaySwimmer: true, maxIndividualScorersPerTeam: 4, maxRelaysScoringPerTeam: 1 }}
           onSave={(settings) => {
             updateWorkspace({ scoringSettings: settings });
             setShowSettingsParamsManager(false);

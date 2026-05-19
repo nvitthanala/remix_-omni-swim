@@ -56,9 +56,9 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
 
         <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6 text-sm">
           
-          <div className="flex gap-4 border-b border-[#1f2937] pb-6">
+          <div className="flex gap-4 border-b border-theme-soft pb-6">
              <div>
-               <label className="block text-[10px] text-gray-500 uppercase tracking-widest font-medium mb-2">Preset Configurations</label>
+               <label className="block text-[10px] text-theme-secondary uppercase tracking-widest font-medium mb-2">Preset Configurations</label>
                <div className="flex gap-2">
                  <button onClick={setDefaults} className="px-3 py-1.5 bg-[var(--surface-muted)] hover:bg-[var(--surface-strong)] text-[var(--text-primary)] rounded text-xs transition-colors border border-theme-soft">Top 16 (Standard)</button>
                  <button onClick={set24Places} className="px-3 py-1.5 bg-[var(--surface-muted)] hover:bg-[var(--surface-strong)] text-[var(--text-primary)] rounded text-xs transition-colors border border-theme-soft">Top 24</button>
@@ -67,13 +67,13 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-[10px] text-gray-500 uppercase tracking-widest font-medium border-b border-[#1f2937] pb-2">Individual Points Setup</h3>
+            <h3 className="text-[10px] text-theme-secondary uppercase tracking-widest font-medium border-b border-theme-soft pb-2">Individual Points Setup</h3>
             <div className="flex items-center gap-4">
               <label className="text-theme-secondary">Scoring Places:</label>
               <select 
                 value={places}
                 onChange={e => handlePlacesChange(parseInt(e.target.value))}
-                className="surface-muted-bg text-[var(--text-primary)] p-1 rounded font-mono"
+                className="glass-input font-mono"
               >
                 <option value={8}>8 Places</option>
                 <option value={12}>12 Places</option>
@@ -87,27 +87,27 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
             <div className="grid grid-cols-4 md:grid-cols-6 gap-3 pt-2">
               {points.map((pt, i) => (
                 <div key={i} className="flex flex-col gap-1">
-                  <span className="text-[10px] text-gray-500 font-mono">Place {i + 1}</span>
+                  <span className="text-[10px] text-theme-secondary font-mono">Place {i + 1}</span>
                   <input 
                     type="number" 
                     value={pt || ''} 
                     onChange={e => handlePointChange(i, parseFloat(e.target.value) || 0)}
-                    className="w-full surface-muted-bg border border-theme-soft p-2 rounded text-[var(--text-primary)] font-mono text-xs focus:outline-none focus:border-[var(--text-accent)]"
+                    className="glass-input w-full font-mono text-xs"
                   />
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="space-y-4 pt-4 border-t border-[#1f2937]">
-            <h3 className="text-[10px] text-gray-500 uppercase tracking-widest font-medium pb-2 border-b border-[#1f2937]">Relay Constraints</h3>
+          <div className="space-y-4 pt-4 border-t border-theme-soft">
+            <h3 className="text-[10px] text-theme-secondary uppercase tracking-widest font-medium pb-2 border-b border-theme-soft">Relay Constraints</h3>
             <div className="grid grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-gray-300 mb-2">Relay Multiplier</label>
+                  <label className="block text-theme-secondary mb-2">Relay Multiplier</label>
                   <select 
                     value={relayMultiplier}
                     onChange={e => setRelayMultiplier(parseFloat(e.target.value))}
-                    className="w-full surface-muted-bg border border-theme-soft p-2 rounded text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--text-accent)]"
+                    className="glass-input w-full font-mono"
                   >
                     <option value={1}>1x (Same as individual)</option>
                     <option value={1.5}>1.5x</option>

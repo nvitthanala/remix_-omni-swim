@@ -109,7 +109,7 @@ def calculate_points(athletes, scoring_settings=None):
                 ath['is_exhibition'] = True
                 
         for marker in cfg.get('timeTrialMarkers', ['TIME TRIAL', 'TT']):
-            if marker in ev_name:
+            if re.search(r'\b' + re.escape(marker) + r'\b', ev_name):
                 ath['is_time_trial'] = True
 
     events = {}
@@ -249,3 +249,13 @@ def calculate_points(athletes, scoring_settings=None):
                 scored_athletes.extend(group)
 
     return scored_athletes
+
+if __name__ == "__main__":
+    input_data = sys.stdin.read()
+    if input_data:
+        try:
+            athletes = json.loads(input_data)
+            scored = calculate_points(athletes)
+            print(json.dumps(scored))
+        except Exception as e:
+            print(json.dumps({"error": str(e)}))
