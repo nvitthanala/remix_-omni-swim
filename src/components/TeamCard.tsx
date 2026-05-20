@@ -10,39 +10,62 @@ import {
   User, 
   Award,
   BarChart3,
-  List
+  List,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
-import { TeamScore, SwimmerResult, ClassYear, Gender } from '../types';
-import { getYearsRemaining, convertTimeToSeconds, formatSecondsToTime } from '../lib/utils';
+import { TeamScore, SwimmerResult, ClassYear, Gender, RelayLegStroke } from '../types';
+import { getYearsRemaining, convertTimeToSeconds, relaySplitQualificationCutEvent } from '../lib/utils';
 import { cutlines } from '../cutlines';
+
+function relayMissingStrokeLabel(stroke: RelayLegStroke | undefined): string {
+  if (!stroke) return '';
+  const m: Record<RelayLegStroke, string> = { back: 'Back', breast: 'Breast', fly: 'Fly', free: 'Free' };
+  return m[stroke] ?? stroke;
+}
 
 interface Props {
   team: TeamScore;
   index: number;
   gender: Gender;
   eventsList?: string[];
+  conference?: string;
   key?: string | number;
   searchQuery?: string;
   onUpdateTime?: (id: string, newTime: string) => void;
+  /** Opens delete confirmation (individual rows only; parent removes swims + marks departed). */
+  onRequestDeleteSwimmer?: (name: string) => void;
 }
 
-export default function TeamCard({ team, index, gender, eventsList = [], searchQuery, onUpdateTime }: Props) {
+export default function TeamCard({ team, index, gender, eventsList = [], conference, searchQuery, onUpdateTime, onRequestDeleteSwimmer }: Props) {
   const [isExpanded, setIsExpanded] = useState(index === 0);
   const [editingResultId, setEditingResultId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [viewMode, setViewMode] = useState<'swimmer'|'event'>('event');
+  const [chartView, setChartView] = useState<'event' | 'class'>('event');
   const [sortMode, setSortMode] = useState<'chrono'|'eventDesc'|'eventAsc'|'swimmerDesc'|'swimmerAsc'>('eventDesc');
   
   // Custom Tooltip State
   const [activeTooltip, setActiveTooltip] = useState<any>(null);
   const [pinnedTooltip, setPinnedTooltip] = useState<any>(null);
+  const [activeClassTooltip, setActiveClassTooltip] = useState<any>(null);
+  const [pinnedClassTooltip, setPinnedClassTooltip] = useState<any>(null);
   const [chartPanePercent, setChartPanePercent] = useState(67);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
   const chartSplitRowRef = useRef<HTMLDivElement>(null);
   const eventChartSurfaceRef = useRef<HTMLDivElement>(null);
+  const classChartSurfaceRef = useRef<HTMLDivElement>(null);
   const isDraggingSplitRef = useRef(false);
+  const lastTooltipIndexRef = useRef<number | null>(null);
+
+  const clearChartTooltips = () => {
+    setActiveTooltip(null);
+    setPinnedTooltip(null);
+    setActiveClassTooltip(null);
+    setPinnedClassTooltip(null);
+    lastTooltipIndexRef.current = null;
+  };
 
   useEffect(() => {
     isDraggingSplitRef.current = isDraggingSplit;
@@ -227,9 +250,11 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
             </>
           ) : (
             swimmersSorted.length > 0 ? swimmersSorted.map((s: any, idx: number) => {
-              // Compute Cutlines dynamically
-              const timeSec = convertTimeToSeconds(s.finalsTime || s.time);
-              const cleanEvent = s.event.replace(" (Avg Split)", "").replace(/ Yard /i, " ").replace(/ Meter /i, " ").trim();
+              const qualEv = relaySplitQualificationCutEvent(s);
+              const timeStrForCuts = qualEv && s.relayLegSplit ? s.relayLegSplit : s.finalsTime || s.time;
+              const timeSec = convertTimeToSeconds(timeStrForCuts);
+              const cleanEventBase = s.event.replace(" (Avg Split)", "").replace(/ Yard /i, " ").replace(/ Meter /i, " ").trim();
+              const cleanEvent = qualEv ?? cleanEventBase;
               const cutsForEvent = cutlines.filter(c => c.gender.toUpperCase() === (gender === Gender.MEN ? 'MEN' : 'WOMEN') && c.event.toUpperCase() === cleanEvent.toUpperCase());
               
               const aCut = cutsForEvent.find(c => c.standard === 'A');
@@ -245,16 +270,37 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                 <div key={idx} className="flex items-center justify-between py-1 border-b border-gray-800/50 last:border-0 swimmer-row" style={{ fontSize: 'clamp(7px, 4.5cqi, 11px)' }}>
                   <div className="flex items-center gap-2">
                     <span className="w-4 font-mono text-gray-500">{s.rank || '-'}</span>
-                    {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
-                    {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
-                    {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
+                    <span className="w-4 shrink-0 inline-flex justify-center">
+                      {s.podium === 'gold' && <span className="text-yellow-400" title="Gold">🥇</span>}
+                      {s.podium === 'silver' && <span className="text-gray-300" title="Silver">🥈</span>}
+                      {s.podium === 'bronze' && <span className="text-orange-400" title="Bronze">🥉</span>}
+                    </span>
                     <span className="font-medium text-gray-200 truncate max-w-[120px]">{s.name}</span>
+                    {s.isRelay && s.relayLegSplit && (
+                      <span className="text-[7px] text-gray-500 font-mono" title="Relay leg split">Split</span>
+                    )}
+                    {s.relayMissingLeg && (
+                      <span className="text-[7px] bg-amber-500/15 text-amber-400 px-1 border border-amber-500/30 rounded-sm ml-1" title="Missing relay leg">
+                        Missing: {relayMissingStrokeLabel(s.relayMissingLeg.stroke)}
+                      </span>
+                    )}
                     {isACut && <span className="text-[7px] bg-rose-400/10 text-rose-400 px-1 border border-rose-400/30 rounded-sm ml-1" title="A CUT">A CUT</span>}
                     {isBCut && <span className="text-[7px] bg-amber-400/10 text-amber-400 px-1 border border-amber-400/30 rounded-sm ml-1" title="B CUT">B CUT</span>}
                   </div>
                   <div className="flex gap-3 text-right">
                     <span className="font-mono text-gray-500">{s.prelimsTime ? `P:${s.prelimsTime}` : ''}</span>
-                    <span className="font-mono text-gray-300">{s.finalsTime ? `F:${s.finalsTime}` : s.time}</span>
+                    <span className="font-mono text-gray-300">
+                      {s.isRelay && s.relayLegSplit ? (
+                        <>
+                          <span className="text-emerald-300/90">{s.relayLegSplit}</span>
+                          <span className="text-gray-500 ml-1">R:{s.relayTeamTime || s.finalsTime || s.time}</span>
+                        </>
+                      ) : s.finalsTime ? (
+                        `F:${s.finalsTime}`
+                      ) : (
+                        s.time
+                      )}
+                    </span>
                     <span className="font-mono text-emerald-400 font-bold">{typeof s.points === 'number' ? s.points.toFixed(1) : s.points}</span>
                   </div>
                 </div>
@@ -277,7 +323,9 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
         <div className="flex flex-col items-start gap-1">
           <h3 className="text-sm font-black uppercase tracking-tighter text-[var(--text-primary)]">{team.teamName}</h3>
           <div className="flex gap-2">
-            <span className="text-[9px] text-theme-secondary uppercase tracking-widest font-medium">NSISC • {topSwimmers.length} Athletes</span>
+            <span className="text-[9px] text-theme-secondary uppercase tracking-widest font-medium">
+              {conference ? `${conference} • ` : ''}{topSwimmers.length} Athletes
+            </span>
           </div>
         </div>
 
@@ -309,18 +357,38 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
               <div
                 className={`min-w-0 w-full space-y-4 lg:w-[var(--chartPane)] lg:max-w-[82%] lg:min-w-[200px] ${isDraggingSplit ? 'pointer-events-none' : ''}`}
               >
-                <div className="flex items-center gap-2">
-                  <BarChart3 size={14} className="text-rose-400" />
-                  <span className="text-[10px] font-medium uppercase tracking-widest text-theme-secondary">Total Points by Event & Class</span>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <BarChart3 size={14} className="text-rose-400" />
+                    <span className="text-[10px] font-medium uppercase tracking-widest text-theme-secondary">
+                      {chartView === 'event' ? 'Points by Event' : 'Points by Class'}
+                    </span>
+                  </div>
+                  <div className="flex items-center surface-overlay border border-theme-soft rounded p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => { setChartView('event'); clearChartTooltips(); }}
+                      className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${chartView === 'event' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
+                    >
+                      By Event
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setChartView('class'); clearChartTooltips(); }}
+                      className={`text-[9px] px-2 py-1 uppercase tracking-widest rounded ${chartView === 'class' ? 'bg-[var(--surface-strong)]/60 text-[var(--text-primary)]' : 'text-theme-secondary hover:text-[var(--text-primary)]'}`}
+                    >
+                      By Class
+                    </button>
+                  </div>
                 </div>
                 
-                <div className="space-y-4">
-                  {/* Event Chart */}
-                  <div ref={eventChartSurfaceRef} className="h-48 w-full min-w-0 surface-overlay p-2 rounded border border-theme-soft relative group/chart">
+                <div className="h-72 w-full min-w-0 surface-overlay p-2 rounded border border-theme-soft relative group/chart">
+                  {chartView === 'event' ? (
+                  <div ref={eventChartSurfaceRef} className="h-full w-full relative">
                     {/* Hover Tooltip (Absolute relative to chart) */}
                     {!pinnedTooltip && activeTooltip && (
                       <div 
-                        className="absolute pointer-events-none rounded-lg overflow-hidden transition-all duration-100"
+                        className="absolute pointer-events-none rounded-lg overflow-hidden"
                         style={{ 
                           left: `${Math.min(Math.max(10, activeTooltip.x - 125), activeTooltip.containerWidth - 260)}px`, 
                           top: `${Math.max(10, activeTooltip.y - 140)}px`,
@@ -352,21 +420,27 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                         data={eventData}
                         onMouseMove={(state: any) => {
                           if (isDraggingSplitRef.current) return;
-                          if (
-                            state &&
-                            state.activeTooltipIndex != null &&
-                            state.activeTooltipIndex >= 0 &&
-                            eventData[state.activeTooltipIndex]
-                          ) {
-                            const payload = eventData[state.activeTooltipIndex];
-                            const x = state.activeCoordinate?.x ?? 0;
-                            const y = state.activeCoordinate?.y ?? 0;
-                            const w = eventChartSurfaceRef.current?.clientWidth ?? 500;
-                            setActiveTooltip({ x, y, payload, containerWidth: w });
+                          const idx = state?.activeTooltipIndex;
+                          if (idx == null || idx < 0 || !eventData[idx]) {
+                            if (lastTooltipIndexRef.current !== null) {
+                              lastTooltipIndexRef.current = null;
+                              setActiveTooltip(null);
+                            }
+                            return;
                           }
+                          if (lastTooltipIndexRef.current === idx) return;
+                          lastTooltipIndexRef.current = idx;
+                          const payload = eventData[idx];
+                          const x = state.activeCoordinate?.x ?? 0;
+                          const y = state.activeCoordinate?.y ?? 0;
+                          const w = eventChartSurfaceRef.current?.clientWidth ?? 500;
+                          setActiveTooltip({ x, y, payload, containerWidth: w });
                         }}
                         onMouseLeave={() => {
-                          if (!isDraggingSplitRef.current) setActiveTooltip(null);
+                          if (!isDraggingSplitRef.current) {
+                            lastTooltipIndexRef.current = null;
+                            setActiveTooltip(null);
+                          }
                         }}
                         onClick={(state: any) => {
                           if (isDraggingSplitRef.current) return;
@@ -396,18 +470,17 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                           strokeWidth={2}
                           dot={false}
                           isAnimationActive={false}
-                          activeDot={{ r: 5, fill: team.color || '#F43F5E', stroke: '#fff', strokeWidth: 1 }}
+                          activeDot={false}
                         />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-
-                  {/* Class Chart */}
-                  <div className="h-40 w-full min-w-0 surface-overlay p-2 rounded border border-theme-soft relative group/chart">
+                  ) : (
+                  <div ref={classChartSurfaceRef} className="h-full w-full relative">
                     {/* Hover Tooltip (Absolute relative to chart) */}
                     {!pinnedClassTooltip && activeClassTooltip && (
                       <div 
-                        className="absolute pointer-events-none rounded-lg overflow-hidden transition-all duration-100"
+                        className="absolute pointer-events-none rounded-lg overflow-hidden"
                         style={{ 
                           left: `${Math.min(Math.max(10, activeClassTooltip.x - 110), activeClassTooltip.containerWidth - 230)}px`, 
                           top: `${Math.max(10, activeClassTooltip.y - 120)}px`,
@@ -470,11 +543,17 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
+                  )}
                 </div>
 
                 <div className="flex justify-between mt-2 px-2 text-[10px] text-theme-secondary font-mono border-t border-theme-soft pt-2 italic uppercase">
-                  <span>Chronological Event Scoring Timeline</span>
-                  <span>{eventData.reduce((acc, d) => acc + d.points, 0).toFixed(1)} PTS TOTAL</span>
+                  <span>{chartView === 'event' ? 'Chronological Event Scoring Timeline' : 'Class Year Contribution'}</span>
+                  <span>
+                    {(chartView === 'event'
+                      ? eventData.reduce((acc, d) => acc + d.points, 0)
+                      : classData.reduce((acc, d) => acc + d.points, 0)
+                    ).toFixed(1)} PTS TOTAL
+                  </span>
                 </div>
               </div>
 
@@ -541,6 +620,16 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                               {group.classYear}
                             </span>
                           )}
+                          {viewMode === 'swimmer' && onRequestDeleteSwimmer && (
+                            <button
+                              type="button"
+                              title="Remove swimmer from workspace"
+                              className="p-1 rounded border border-theme-soft text-theme-secondary hover:text-rose-400 hover:border-rose-400/40 transition-colors"
+                              onClick={() => onRequestDeleteSwimmer(group.name)}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
                         </div>
                         <div className="text-right">
                           <span className="font-mono font-black text-[var(--text-primary)] text-xs">{group.points.toFixed(1)} <span className="text-[8px] text-theme-secondary">PTS</span></span>
@@ -549,8 +638,11 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
 
                       <div className="space-y-1">
                         {group.swimmers.map((res: SwimmerResult, i: number) => {
-                          const timeSec = convertTimeToSeconds(res.time);
-                          const cleanEvent = res.event.replace(" (Avg Split)", "").replace(/ Yard /i, " ").replace(/ Meter /i, " ").trim();
+                          const qualEv = relaySplitQualificationCutEvent(res);
+                          const timeStrForCuts = qualEv && res.relayLegSplit ? res.relayLegSplit : res.time;
+                          const timeSec = convertTimeToSeconds(timeStrForCuts);
+                          const cleanEventBase = res.event.replace(" (Avg Split)", "").replace(/ Yard /i, " ").replace(/ Meter /i, " ").trim();
+                          const cleanEvent = qualEv ?? cleanEventBase;
                           const cutsForEvent = cutlines.filter(c => c.gender.toUpperCase() === (gender === Gender.MEN ? 'MEN' : 'WOMEN') && c.event.toUpperCase() === cleanEvent.toUpperCase());
                           
                           const aCut = cutsForEvent.find(c => c.standard === 'A');
@@ -572,6 +664,8 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                              else if (futureBCutSec > 0 && timeSec <= futureBCutSec) willMakeFutureCut = 'B';
                           }
 
+                          const relaySplitPrimary = res.isRelay && res.relayLegSplit;
+
                           return (
                             <div key={i} className="flex items-center justify-between text-[10px] py-1.5 border-t border-theme-soft">
                               <div className="flex items-center gap-2 text-theme-secondary font-mono w-1/3">
@@ -579,6 +673,11 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                                 <span className="truncate max-w-[150px]" title={viewMode === 'swimmer' ? res.event : res.name}>
                                   {viewMode === 'swimmer' ? res.event : res.name}
                                 </span>
+                                {res.relayMissingLeg && (
+                                  <span className="text-[7px] text-amber-400 shrink-0" title="Missing relay leg">
+                                    Missing {relayMissingStrokeLabel(res.relayMissingLeg.stroke)}
+                                  </span>
+                                )}
                                 {res.roundSwam && <span className="text-[8px] surface-overlay px-1 rounded truncate max-w-[60px]">{res.roundSwam}</span>}
                               </div>
                               <div className="flex flex-col items-end gap-0.5 justify-center w-1/3 text-right">
@@ -587,7 +686,16 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                                     Prelim: {res.prelimsTime}
                                   </div>
                                 )}
-                                {res.finalsTime && (
+                                {relaySplitPrimary && (
+                                  <div
+                                    className={`font-mono font-medium cursor-pointer hover:underline ${isACut ? 'text-rose-400' : isBCut ? 'text-amber-400' : 'text-theme-secondary'}`}
+                                    onClick={() => { if(onUpdateTime && res.id) { setEditingResultId(res.id); setEditValue(res.time); } }}
+                                  >
+                                    Split: {res.relayLegSplit}
+                                    <span className="block text-[8px] text-theme-secondary font-normal">Relay {res.relayTeamTime || res.finalsTime || res.time}</span>
+                                  </div>
+                                )}
+                                {res.finalsTime && !relaySplitPrimary && (
                                   <div 
                                     className={`font-mono font-medium cursor-pointer hover:underline ${isACut ? 'text-rose-400' : isBCut ? 'text-amber-400' : 'text-theme-secondary'}`}
                                     onClick={() => { if(onUpdateTime && res.id) { setEditingResultId(res.id); setEditValue(res.time); } }}
@@ -595,7 +703,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                                     Final: {res.finalsTime}
                                   </div>
                                 )}
-                                {!res.finalsTime && !res.prelimsTime && (
+                                {!res.finalsTime && !res.prelimsTime && !relaySplitPrimary && (
                                   <div 
                                     className={`font-mono font-medium cursor-pointer hover:underline ${isACut ? 'text-rose-400' : isBCut ? 'text-amber-400' : 'text-theme-secondary'}`}
                                     onClick={() => { if(onUpdateTime && res.id) { setEditingResultId(res.id); setEditValue(res.time); } }}
@@ -628,7 +736,7 @@ export default function TeamCard({ team, index, gender, eventsList = [], searchQ
                                   </form>
                                 )}
                               </div>
-                              <div className="flex items-center justify-end gap-2 w-1/3">
+                              <div className="flex items-center justify-end gap-2 w-1/3 flex-wrap">
                                 {isACut && <span title="Current A Cut Achieved" className="text-[8px] bg-rose-400/10 text-rose-400 px-1 border border-rose-400/30 rounded-sm">A CUT</span>}
                                 {isBCut && <span title="Current B Cut Achieved" className="text-[8px] bg-amber-400/10 text-amber-400 px-1 border border-amber-400/30 rounded-sm">B CUT</span>}
                                 <span className={`font-mono font-medium w-8 text-right ${res.points === 'N/A' || res.points === 0 ? 'text-theme-secondary' : 'text-emerald-500'}`}>

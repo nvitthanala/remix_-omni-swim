@@ -3,8 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Gender, SwimmerResult, Recruit, ClassYear, ScoringSettings, TeamScore } from '../types';
+import {
+  Gender,
+  SwimmerResult,
+  Recruit,
+  ClassYear,
+  ScoringSettings,
+  TeamScore,
+  RelayLegStroke,
+  RelayMissingLeg,
+} from '../types';
 import { CONVERSION_FACTORS, SCORING_POINTS } from '../constants';
+import { DEFAULT_SCORING_SETTINGS, mergeScoringSettings } from './scoringDefaults';
+
+export { DEFAULT_SCORING_SETTINGS, mergeScoringSettings } from './scoringDefaults';
 import teamColorsData from '../team_colors.json';
 
 type TeamColorJsonEntry = string | { primary: string; secondary?: string };
@@ -203,6 +215,52 @@ export function formatSecondsToTime(seconds: number): string {
   return `${mins}:${secs.padStart(5, '0')}`;
 }
 
+/** Case-insensitive name key for roster / relay matching. */
+export function normalizeSwimmerName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function relayGroupKey(r: SwimmerResult): string {
+  const t = convertTimeToSeconds(r.time);
+  const rk = parseRankInt(r.rank) ?? '';
+  const rs = (r.roundSwam || '').trim();
+  return `${(r.team || '').trim()}|${r.event}|${rs}|${rk}|${t}`;
+}
+
+function strokeKeywordsForRelayLeg(eventLower: string, legIndex: number): string[] {
+  if (eventLower.includes('medley')) {
+    const m: Record<number, string[]> = {
+      0: ['backstroke', 'back'],
+      1: ['breaststroke', 'breast'],
+      2: ['butterfly', 'fly'],
+      3: ['freestyle', 'free'],
+    };
+    return m[legIndex] || ['freestyle', 'free'];
+  }
+  return ['freestyle', 'free'];
+}
+
+function inferRelayStrokeDistance(event: string): number {
+  const ev = event.toLowerCase();
+  let distance = 100;
+  if (/\b200\b/.test(ev) && !/\b800\b/.test(ev) && !/\b1200\b/.test(ev)) distance = 50;
+  if (/\b800\b/.test(ev) || /\b1000\b/.test(ev)) distance = 200;
+  return distance;
+}
+
+function eventMatchesStrokeDistance(eventRaw: string, distance: number, strokeKeywords: string[]): boolean {
+  const evNorm = eventRaw.replace(/\s*\(relay split\)\s*$/i, '').toLowerCase();
+  if (!evNorm.includes(String(distance))) return false;
+  return strokeKeywords.some(kw => evNorm.includes(kw));
+}
+
+function relayStrokeForIndex(eventLower: string, legIndex: number): RelayLegStroke {
+  if (eventLower.includes('medley') && legIndex < 4) {
+    return (['back', 'breast', 'fly', 'free'] as const)[legIndex];
+  }
+  return 'free';
+}
+
 export function calculateProjectedTime(timeSec: number, classYear: string, overallDropPercent = -1.0): number {
   let yearsRemaining = 0;
   if (classYear === 'FR') yearsRemaining = 3;
@@ -219,9 +277,15 @@ export function calculateProjectedTime(timeSec: number, classYear: string, overa
 
 export function convertToSCY(timeStr: string, event: string, gender: Gender, type: 'LCM' | 'SCM' | 'SCY'): string {
   if (type === 'SCY') return timeStr;
-  
+
   const seconds = convertTimeToSeconds(timeStr);
-  const factors = CONVERSION_FACTORS[event] || CONVERSION_FACTORS['50 Freestyle']; // Fallback
+  const baseEvent = event.replace(/\s*\(Relay split\)\s*$/i, '').trim();
+  let factors = CONVERSION_FACTORS[baseEvent];
+  if (!factors && baseEvent.startsWith('50 ')) {
+    const hundredKey = baseEvent.replace(/^50\s+/, '100 ');
+    factors = CONVERSION_FACTORS[hundredKey];
+  }
+  if (!factors) factors = CONVERSION_FACTORS['50 Freestyle'];
   
   let factor = 1.0;
   if (type === 'LCM') {
@@ -233,131 +297,464 @@ export function convertToSCY(timeStr: string, event: string, gender: Gender, typ
   return formatSecondsToTime(seconds * factor);
 }
 
-export function calculatePoints(results: SwimmerResult[], settings?: ScoringSettings): SwimmerResult[] {
-  if (!settings) {
-    settings = {
-      scoringPoints: SCORING_POINTS,
-      relayMultiplier: 2,
-      halfRateRelaySwimmer: true,
-      maxIndividualScorersPerTeam: 4,
-      maxRelaysScoringPerTeam: 1
-    };
+const DEFAULT_UNSCORED_ROUNDS = [
+  'C FINAL',
+  'C-FINAL',
+  'BONUS FINAL',
+  'D FINAL',
+  'D-FINAL',
+  'TIME TRIAL',
+];
+
+const INSTITUTION_TEAM_HINT =
+  /\b(university|college|institute|seminary|baptist|methodist|lutheran|catholic|christian|technological|polytechnic|academy|national|international)\b/i;
+
+/** True if string looks like a school name (not a bare "First Last" athlete). */
+export function looksLikeInstitutionTeamName(team: string | null | undefined): boolean {
+  const s = String(team ?? '').trim();
+  if (!s) return false;
+  if (INSTITUTION_TEAM_HINT.test(s)) return true;
+  if (/\b(st\.|st\s|'s)\b/i.test(s)) return true;
+  if (/\btech\b/i.test(s)) return true;
+  if (/\ba\s*&\s*m\b/i.test(s)) return true;
+  if (/\bstate\b/i.test(s)) return true;
+  return false;
+}
+
+function classifyRoundTier(roundSwam: string | undefined): 'A' | 'B' | 'C' | 'D' | 'PRE' | 'TT' | 'UNK' {
+  const r = (roundSwam || '').toUpperCase();
+  if (r.includes('TIME TRIAL') || r.includes('TIME TRIALS')) return 'TT';
+  if (r.includes('C FINAL') || r.includes('C-FINAL') || r.includes('BONUS FINAL')) return 'C';
+  if (r.includes('D FINAL') || r.includes('D-FINAL')) return 'D';
+  if (r.includes('PRELIM')) return 'PRE';
+  if (r.includes('B FINAL') || r.includes('B-FINAL') || r.includes('CONSOLATION')) return 'B';
+  if (r.includes('A FINAL') || r.includes('A-FINAL') || r.includes('CHAMPIONSHIP')) return 'A';
+  if (r.includes('FINALS')) return 'A';
+  return 'UNK';
+}
+
+function isDistanceEvent(event: string | undefined): boolean {
+  if (!event) return false;
+  const u = event.toUpperCase();
+  return /\b(1000|1650|1500|800|10000)\b/.test(u) || u.includes('TIMED');
+}
+
+function isUnscoredRoundOrEvent(roundSwam: string | undefined, event: string | undefined, settings: ScoringSettings): boolean {
+  const r = (roundSwam || '').toUpperCase();
+  const e = (event || '').toUpperCase();
+  const list = (settings.unscoredRounds?.length ? settings.unscoredRounds : DEFAULT_UNSCORED_ROUNDS).map(x => x.toUpperCase());
+  for (const ur of list) {
+    if (r.includes(ur) || e.includes(ur)) return true;
+  }
+  if (e.includes('TIME TRIAL')) return true;
+  return false;
+}
+
+function canScoreAthlete(roundSwam: string | undefined, event: string | undefined, settings: ScoringSettings): boolean {
+  if (isUnscoredRoundOrEvent(roundSwam, event, settings)) return false;
+  const tier = classifyRoundTier(roundSwam);
+  if (tier === 'TT' || tier === 'C' || tier === 'D') return false;
+  if (tier === 'PRE') return isDistanceEvent(event);
+  return true;
+}
+
+/** Parse HyTek rank (number or string) for scoring. */
+export function parseRankInt(rank: unknown): number | null {
+  if (typeof rank === 'number' && Number.isFinite(rank) && rank > 0) {
+    return Math.floor(rank);
+  }
+  if (typeof rank === 'string') {
+    const m = rank.trim().match(/(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return n > 0 ? n : null;
+    }
+  }
+  return null;
+}
+
+export function isRelayResult(r: SwimmerResult): boolean {
+  if (r.isRelay) return true;
+  return /\brelay\b/i.test(r.event || '');
+}
+
+/**
+ * B-final row index into scoringPoints (0-based).
+ * - In-heat place 1..bracket → overall places bracket+1 .. bracket*2 (e.g. 1→9th, 8→16th).
+ * - Overall place bracket+1 .. bracket*2 (HyTek/NSISC often lists 9–16 on the sheet).
+ */
+function scoringRowIndexBFinal(rank: number, bracket: number, ptsLength: number): number | null {
+  if (rank < 1) return null;
+  const lastScoringPlace = Math.min(ptsLength, bracket * 2);
+  if (rank > bracket) {
+    if (rank < bracket + 1 || rank > lastScoringPlace) return null;
+    return rank - 1;
+  }
+  const idx = bracket + (rank - 1);
+  return idx >= 0 && idx < ptsLength ? idx : null;
+}
+
+/** 0-based index into scoringPoints, or null if this swim does not earn place points. */
+function scoringRowIndex(
+  roundSwam: string | undefined,
+  rank: number,
+  event: string | undefined,
+  settings: ScoringSettings
+): number | null {
+  if (!canScoreAthlete(roundSwam, event, settings)) return null;
+  if (!rank || rank < 1) return null;
+  const pts = settings.scoringPoints;
+  if (!pts.length) return null;
+  const bracket = settings.aFinalBracketSize ?? Math.floor(pts.length / 2);
+  const tier = classifyRoundTier(roundSwam);
+  if (tier === 'B') {
+    return scoringRowIndexBFinal(rank, bracket, pts.length);
+  }
+  const idx = rank - 1;
+  return idx >= 0 && idx < pts.length ? idx : null;
+}
+
+function scoringRowIndexForRelay(
+  roundSwam: string | undefined,
+  rank: number,
+  event: string | undefined,
+  settings: ScoringSettings
+): number | null {
+  return scoringRowIndex(roundSwam, rank, event, settings);
+}
+
+function roundTierSort(roundSwam: string | undefined): number {
+  const t = classifyRoundTier(roundSwam);
+  const order: Record<string, number> = { A: 1, UNK: 1, B: 2, PRE: 3, C: 8, D: 8, TT: 9 };
+  return order[t] ?? 5;
+}
+
+export function isDivingEvent(event: string | undefined, patterns?: string[]): boolean {
+  if (!event) return false;
+  const u = event.toUpperCase();
+  const list = patterns?.length ? patterns : ['DIVING', 'DIVE'];
+  return list.some(p => {
+    const token = p.toUpperCase();
+    return token === 'DIVE' ? /\bDIVE\b/.test(u) : u.includes(token);
+  });
+}
+
+function isDivingForSettings(event: string | undefined, settings: ScoringSettings): boolean {
+  return isDivingEvent(event, settings.diverEventPattern);
+}
+
+export function eventMeetSortKey(event: string): number {
+  const m = event.match(/Event\s+(\d+)/i);
+  return m ? parseInt(m[1], 10) : 99999;
+}
+
+export function sortEventsByMeetOrder(events: string[]): string[] {
+  return [...events].sort((a, b) => eventMeetSortKey(a) - eventMeetSortKey(b));
+}
+
+type TeamMeetState = {
+  poolWeights: Map<string, number>;
+  relayUnitsScored: number;
+};
+
+function teamMeetStateKey(team: string, gender: Gender | string | undefined): string {
+  return `${String(team).trim()}|||${gender ?? ''}`;
+}
+
+function totalPoolWeight(pool: Map<string, number>): number {
+  let sum = 0;
+  pool.forEach(w => {
+    sum += w;
+  });
+  return sum;
+}
+
+function scorerWeightForEvent(event: string, settings: ScoringSettings): number {
+  if (!isDivingForSettings(event, settings)) return 1;
+  return settings.diverScorerWeight ?? 1;
+}
+
+function swimmerInPool(pool: Map<string, number>, name: string): boolean {
+  return pool.has(normalizeSwimmerName(name));
+}
+
+function canAddSwimmerToPool(
+  pool: Map<string, number>,
+  name: string,
+  event: string,
+  settings: ScoringSettings
+): boolean {
+  const cap = settings.maxIndividualScorersPerTeam ?? 18;
+  if (cap >= 999) return true;
+  const key = normalizeSwimmerName(name);
+  if (pool.has(key)) return true;
+  const add = scorerWeightForEvent(event, settings);
+  return totalPoolWeight(pool) + add <= cap + 1e-9;
+}
+
+function addSwimmerToPool(pool: Map<string, number>, name: string, event: string, settings: ScoringSettings): void {
+  const key = normalizeSwimmerName(name);
+  if (pool.has(key)) return;
+  pool.set(key, scorerWeightForEvent(event, settings));
+}
+
+function getOrCreateMeetState(states: Map<string, TeamMeetState>, team: string, gender: Gender | string | undefined): TeamMeetState {
+  const key = teamMeetStateKey(team, gender);
+  let s = states.get(key);
+  if (!s) {
+    s = { poolWeights: new Map(), relayUnitsScored: 0 };
+    states.set(key, s);
+  }
+  return s;
+}
+
+function scoreIndividualsInEvent(
+  individuals: SwimmerResult[],
+  merged: ScoringSettings,
+  meetStates: Map<string, TeamMeetState>,
+  useMeetCaps: boolean
+): SwimmerResult[] {
+  const indivGroups = new Map<string, SwimmerResult[]>();
+  for (const r of individuals) {
+    const rk = parseRankInt(r.rank) ?? 0;
+    const key =
+      rk > 0
+        ? `${(r.roundSwam || '').trim()}|${rk}`
+        : `${(r.roundSwam || '').trim()}|T|${convertTimeToSeconds(r.time)}|${r.name}`;
+    if (!indivGroups.has(key)) indivGroups.set(key, []);
+    indivGroups.get(key)!.push(r);
   }
 
-  // Group and sort PDF swims first
+  const indivSortedKeys = Array.from(indivGroups.keys()).sort((a, b) => {
+    const ga = indivGroups.get(a)![0];
+    const gb = indivGroups.get(b)![0];
+    const tw = roundTierSort(ga.roundSwam) - roundTierSort(gb.roundSwam);
+    if (tw !== 0) return tw;
+    const ra = parseRankInt(ga.rank) ?? 9999;
+    const rb = parseRankInt(gb.rank) ?? 9999;
+    if (ra !== rb) return ra - rb;
+    return convertTimeToSeconds(ga.time) - convertTimeToSeconds(gb.time);
+  });
+
+  const teamIndivScorers: Record<string, number> = {};
+  const indivOut: SwimmerResult[] = [];
+
+  for (const key of indivSortedKeys) {
+    const group = indivGroups.get(key)!;
+    const sample = group[0];
+    const ex = group.some(r => r.isExhibition);
+    const tt = group.some(r => r.isTimeTrial);
+
+    if (ex || tt || !canScoreAthlete(sample.roundSwam, sample.event, merged)) {
+      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      continue;
+    }
+
+    const rk = parseRankInt(sample.rank);
+    const baseIdx = rk != null ? scoringRowIndex(sample.roundSwam, rk, sample.event, merged) : null;
+    if (baseIdx == null) {
+      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      continue;
+    }
+
+    const pts = merged.scoringPoints;
+    const gLen = group.length;
+    const avail = pts.length - baseIdx;
+    const take = Math.min(gLen, avail);
+    const slice = pts.slice(baseIdx, baseIdx + take);
+    if (!slice.length) {
+      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      continue;
+    }
+    const each = slice.reduce((s, p) => s + p, 0) / gLen;
+
+    const cap = merged.maxIndividualScorersPerTeam ?? 999;
+    const byTeam = new Map<string, SwimmerResult[]>();
+    for (const r of group) {
+      const t = String(r.team ?? 'Unknown').trim() || 'Unknown';
+      if (!byTeam.has(t)) byTeam.set(t, []);
+      byTeam.get(t)!.push(r);
+    }
+
+    for (const [team, members] of byTeam) {
+      const meetState = getOrCreateMeetState(meetStates, team, members[0].gender);
+      const uniqueNames = [...new Set(members.map(m => m.name))];
+
+      if (useMeetCaps) {
+        const canAllScore = uniqueNames.every(n =>
+          canAddSwimmerToPool(meetState.poolWeights, n, sample.event, merged)
+        );
+        for (const r of members) {
+          indivOut.push({ ...r, points: canAllScore ? each : 0 });
+        }
+        if (canAllScore) {
+          uniqueNames.forEach(n => addSwimmerToPool(meetState.poolWeights, n, sample.event, merged));
+        }
+      } else if (cap < 999 && (teamIndivScorers[team] || 0) >= cap) {
+        members.forEach(r => indivOut.push({ ...r, points: 0 }));
+      } else {
+        members.forEach(r => indivOut.push({ ...r, points: each }));
+        if (cap < 999) teamIndivScorers[team] = (teamIndivScorers[team] || 0) + uniqueNames.length;
+      }
+    }
+  }
+
+  return indivOut;
+}
+
+function scoreRelaysInEvent(
+  relays: SwimmerResult[],
+  merged: ScoringSettings,
+  meetStates: Map<string, TeamMeetState>,
+  useMeetCaps: boolean
+): SwimmerResult[] {
+  const relayMap = new Map<string, SwimmerResult[]>();
+  for (const r of relays) {
+    const rk = parseRankInt(r.rank) ?? '';
+    const k = `${r.team}_${(r.roundSwam || '').trim()}_${r.time}_${rk}`;
+    if (!relayMap.has(k)) relayMap.set(k, []);
+    relayMap.get(k)!.push(r);
+  }
+  const relayKeys = Array.from(relayMap.keys()).sort((a, b) => {
+    const ra = relayMap.get(a)![0];
+    const rb = relayMap.get(b)![0];
+    const tw = roundTierSort(ra.roundSwam) - roundTierSort(rb.roundSwam);
+    if (tw !== 0) return tw;
+    const rna = parseRankInt(ra.rank) ?? 9999;
+    const rnb = parseRankInt(rb.rank) ?? 9999;
+    if (rna !== rnb) return rna - rnb;
+    return convertTimeToSeconds(ra.time) - convertTimeToSeconds(rb.time);
+  });
+
+  const teamRelayScorers: Record<string, number> = {};
+  const relayOut: SwimmerResult[] = [];
+
+  for (const key of relayKeys) {
+    const group = relayMap.get(key)!;
+    const sample = group[0];
+    const ex = group.some(r => r.isExhibition);
+    const tt = group.some(r => r.isTimeTrial);
+    const team = String(sample.team ?? 'Unknown').trim() || 'Unknown';
+    const meetState = getOrCreateMeetState(meetStates, team, sample.gender);
+
+    if (ex || tt || !canScoreAthlete(sample.roundSwam, sample.event, merged)) {
+      group.forEach(r => relayOut.push({ ...r, points: 0 }));
+      continue;
+    }
+
+    const rk = parseRankInt(sample.rank);
+    const idx = rk != null ? scoringRowIndexForRelay(sample.roundSwam, rk, sample.event, merged) : null;
+    if (idx == null) {
+      group.forEach(r => relayOut.push({ ...r, points: 0 }));
+      continue;
+    }
+
+    const maxRel = merged.maxRelaysScoringPerTeam ?? 2;
+    const relayCount = useMeetCaps ? meetState.relayUnitsScored : teamRelayScorers[team] || 0;
+    if (relayCount >= maxRel) {
+      group.forEach(r => relayOut.push({ ...r, points: 0 }));
+      continue;
+    }
+
+    if (useMeetCaps && merged.relayEligibleFromScorerPool === true) {
+      const allInPool = group.every(r => swimmerInPool(meetState.poolWeights, r.name));
+      if (!allInPool) {
+        group.forEach(r => relayOut.push({ ...r, points: 0 }));
+        continue;
+      }
+    }
+
+    const teamPts = merged.scoringPoints[idx] * merged.relayMultiplier;
+    const n = group.length;
+    let swimmerPts = teamPts / (n > 0 ? n : 1);
+    if (merged.halfRateRelaySwimmer) {
+      swimmerPts = teamPts / (n >= 4 ? 4 : Math.max(n, 1));
+    }
+
+    if (useMeetCaps) meetState.relayUnitsScored += 1;
+    else teamRelayScorers[team] = (teamRelayScorers[team] || 0) + 1;
+
+    group.forEach(r => relayOut.push({ ...r, points: swimmerPts }));
+  }
+
+  return relayOut;
+}
+
+export function calculatePoints(results: SwimmerResult[], settings?: ScoringSettings): SwimmerResult[] {
+  const merged = mergeScoringSettings(settings);
+  const useMeetCaps = merged.scorerCapScope === 'meet' || merged.maxIndividualScorersPerTeam < 999;
+
   const pdfResults = results.filter(r => !r.isRecruit);
   const recruitResults = results.filter(r => r.isRecruit);
 
-  // Helper to weight rounds so A Final is ranked before B Final
-  const getRoundWeight = (round: string | undefined): number => {
-    if (!round) return 4;
-    const r = round.toUpperCase();
-    if (r.includes('A FINAL') || r.includes('CHAMPIONSHIP')) return 1;
-    if (r.includes('B FINAL') || r.includes('CONSOLATION')) return 2;
-    if (r.includes('C FINAL') || r.includes('BONUS')) return 3;
-    if (r.includes('FINALS')) return 1; // Unspecified final is treated as A-Final for points
-    return 4; // Prelims
-  };
+  const meetStates = new Map<string, TeamMeetState>();
+  const scoredById = new Map<string, SwimmerResult>();
 
-  // Sort PDF results by round, then by time
+  if (useMeetCaps) {
+    const byEvent = new Map<string, SwimmerResult[]>();
+    for (const r of pdfResults) {
+      if (!byEvent.has(r.event)) byEvent.set(r.event, []);
+      byEvent.get(r.event)!.push(r);
+    }
+    const sortedEvents = sortEventsByMeetOrder(Array.from(byEvent.keys()));
+    for (const event of sortedEvents) {
+      const evRows = byEvent.get(event)!;
+      const individuals = evRows.filter(r => !isRelayResult(r));
+      const relays = evRows.filter(r => isRelayResult(r));
+      for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, true)) {
+        scoredById.set(row.id, row);
+      }
+      for (const row of scoreRelaysInEvent(relays, merged, meetStates, true)) {
+        scoredById.set(row.id, row);
+      }
+    }
+  } else {
+    const individuals = pdfResults.filter(r => !isRelayResult(r));
+    const relays = pdfResults.filter(r => isRelayResult(r));
+    for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, false)) {
+      scoredById.set(row.id, row);
+    }
+    for (const row of scoreRelaysInEvent(relays, merged, meetStates, false)) {
+      scoredById.set(row.id, row);
+    }
+  }
+
+  for (const r of pdfResults) {
+    if (!scoredById.has(r.id)) scoredById.set(r.id, { ...r, points: 0 });
+  }
+
+  const byId = scoredById;
+
+  // Preserve recruit interleave order (by time vs PDF) for display; recruits score 0
   const sortedPdf = [...pdfResults].sort((a, b) => {
-    const roundA = getRoundWeight(a.roundSwam);
-    const roundB = getRoundWeight(b.roundSwam);
-    if (roundA !== roundB) return roundA - roundB;
+    const tw = roundTierSort(a.roundSwam) - roundTierSort(b.roundSwam);
+    if (tw !== 0) return tw;
+    const ra = parseRankInt(a.rank) ?? 9999;
+    const rb = parseRankInt(b.rank) ?? 9999;
+    if (ra !== rb) return ra - rb;
     return convertTimeToSeconds(a.time) - convertTimeToSeconds(b.time);
   });
 
-  // Now we have a sorted ladder of PDF swimmers. We will inject recruits into this ladder based purely on their time.
   const sorted: SwimmerResult[] = [];
   let pdfIdx = 0;
-  
-  // Sort recruits by time
   recruitResults.sort((a, b) => convertTimeToSeconds(a.time) - convertTimeToSeconds(b.time));
-
   for (const recruit of recruitResults) {
     const recTime = convertTimeToSeconds(recruit.time);
-    // Push PDF swimmers that are faster than the recruit
     while (pdfIdx < sortedPdf.length && convertTimeToSeconds(sortedPdf[pdfIdx].time) <= recTime) {
-      sorted.push(sortedPdf[pdfIdx]);
+      const p = sortedPdf[pdfIdx];
+      const scored = byId.get(p.id) ?? { ...p, points: 0 };
+      sorted.push(scored);
       pdfIdx++;
     }
-    // Now insert the recruit
-    sorted.push(recruit);
+    sorted.push({ ...recruit, rank: 0, points: 0 });
   }
-  // Push remaining PDF swimmers
   while (pdfIdx < sortedPdf.length) {
-    sorted.push(sortedPdf[pdfIdx]);
+    const p = sortedPdf[pdfIdx];
+    sorted.push(byId.get(p.id) ?? { ...p, points: 0 });
     pdfIdx++;
   }
-  
-  // Group by (team + time) to identify unique swims (especially for relays)
-  const groupedSwims: { key: string; results: SwimmerResult[] }[] = [];
-  
-  sorted.forEach(res => {
-    const key = `${res.team}_${res.time}`;
-    if (res.isRelay) {
-      let g = groupedSwims.find(g => g.key === key);
-      if (g) g.results.push(res);
-      else groupedSwims.push({ key, results: [res] });
-    } else {
-      // Individuals might have same time but form a tie
-      groupedSwims.push({ key: `${res.name}_${key}`, results: [res] });
-    }
-  });
 
-  const finalResults: SwimmerResult[] = [];
-  let place = 0;
-  let pointsAllowedPlace = 0;
-  const teamIndividualCounts: Record<string, number> = {};
-  const teamRelayCounts: Record<string, number> = {};
-
-  groupedSwims.forEach(group => {
-    const isExhibition = group.results.some(r => r.isExhibition);
-    const isTimeTrial = group.results.some(r => r.isTimeTrial);
-    const team = group.results[0].team;
-    const isRelay = group.results[0].isRelay;
-    
-    // Check limits
-    let limitReached = false;
-    if (isRelay) {
-      if ((teamRelayCounts[team] || 0) >= (settings?.maxRelaysScoringPerTeam ?? 1)) {
-        limitReached = true;
-      }
-    } else {
-      if ((teamIndividualCounts[team] || 0) >= (settings?.maxIndividualScorersPerTeam ?? 4)) {
-        limitReached = true;
-      }
-    }
-
-    if (!isExhibition && !isTimeTrial && !limitReached && pointsAllowedPlace < (settings?.scoringPoints?.length || 0)) {
-      const basePoints = settings!.scoringPoints[pointsAllowedPlace];
-      
-      let points = basePoints;
-      
-      if (isRelay) {
-        teamRelayCounts[team] = (teamRelayCounts[team] || 0) + 1;
-        points *= settings!.relayMultiplier;
-        if (settings!.halfRateRelaySwimmer) {
-          points = points / 4.0;
-        }
-      } else {
-        teamIndividualCounts[team] = (teamIndividualCounts[team] || 0) + 1;
-      }
-      
-      group.results.forEach(res => {
-        finalResults.push({ ...res, rank: place + 1, points });
-      });
-      pointsAllowedPlace++;
-      place++;
-    } else {
-      group.results.forEach(res => {
-        finalResults.push({ ...res, rank: (isExhibition || isTimeTrial) ? 0 : place + 1, points: 0 });
-      });
-      if (!isExhibition && !isTimeTrial) place++;
-    }
-  });
-
-  return finalResults;
+  return sorted;
 }
 
 export function getYearsRemaining(year: ClassYear): number {
@@ -466,111 +863,184 @@ export function assignTeamLineStyles(teams: TeamScore[]): TeamScore[] {
   return out;
 }
 
-export function simulateRoster(results: SwimmerResult[], recruits: SwimmerResult[], removeSeniors: boolean): SwimmerResult[] {
-  if (!removeSeniors) return [...results, ...recruits];
+export function simulateRoster(
+  results: SwimmerResult[],
+  recruits: SwimmerResult[],
+  removeSeniors: boolean,
+  excludedSwimmerNames?: Set<string>
+): SwimmerResult[] {
+  const excluded = excludedSwimmerNames ?? new Set<string>();
+  const runRosterSim = removeSeniors || excluded.size > 0;
+  if (!runRosterSim) {
+    return [...results, ...recruits];
+  }
 
-  // 1. Drop individuals who are SR
-  let activeSwimmers = results.filter(r => {
-    if (r.isRelay) return true; // keep relays for now
-    if (r.classYear === 'SR' || r.classYear === 'Sr' || r.classYear === 'Senior') return false;
+  const basePool = results.filter(r => {
+    if (r.isRelay) return true;
+    if (excluded.has(normalizeSwimmerName(r.name))) return false;
+    if (removeSeniors && (r.classYear === 'SR' || r.classYear === 'Sr' || r.classYear === 'Senior')) return false;
     return true;
   });
-  
-  // Mix in recruits so they are available replacements
-  activeSwimmers = [...activeSwimmers, ...recruits];
-  
-  // 2. Adjust Relays
-  const finalResults: SwimmerResult[] = [];
-  
-  // Pre-calculate best replacements per team for strokes (approx)
-  // Stroke 50/100 times per team
-  const getBestTimeForStroke = (team: string, distance: number, strokeKeywords: string[], excludeNames: string[]) => {
-    const candidates = activeSwimmers.filter(s => 
-      !s.isRelay && s.team === team && 
-      !excludeNames.includes(s.name) &&
-      strokeKeywords.some(kw => s.event.toLowerCase().includes(kw)) &&
-      s.event.includes(distance.toString())
+
+  const activeSwimmers = [...basePool, ...recruits];
+
+  const getBestTimeForStroke = (
+    team: string,
+    distance: number,
+    strokeKeywords: string[],
+    excludeNormalizedNames: Set<string>
+  ): SwimmerResult | null => {
+    const candidates = activeSwimmers.filter(
+      s =>
+        !s.isRelay &&
+        s.team === team &&
+        !excludeNormalizedNames.has(normalizeSwimmerName(s.name)) &&
+        eventMatchesStrokeDistance(s.event, distance, strokeKeywords)
     );
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => convertTimeToSeconds(a.time) - convertTimeToSeconds(b.time));
     return candidates[0];
   };
 
-  activeSwimmers.forEach(r => {
+  const finalResults: SwimmerResult[] = [];
+  const processedRelayKeys = new Set<string>();
+
+  for (const r of activeSwimmers) {
     if (!r.isRelay) {
       finalResults.push(r);
-      return;
+      continue;
     }
 
-    // It's a relay.
-    let teamName = r.team;
-    let newTimeSecs = convertTimeToSeconds(r.time);
+    const k = relayGroupKey(r);
+    if (processedRelayKeys.has(k)) continue;
+    processedRelayKeys.add(k);
+
+    const group = results.filter(x => x.isRelay && relayGroupKey(x) === k);
+    if (group.length === 0) continue;
+
+    const template = group[0];
+    const evLower = template.event.toLowerCase();
+    const distance = inferRelayStrokeDistance(template.event);
+
+    const ordered = [...group].sort((a, b) => (a.relayLegIndex ?? 0) - (b.relayLegIndex ?? 0));
+
+    const legsCanonical =
+      template.relayNames && template.relayNames.length > 0
+        ? template.relayNames.map(n => ({ name: n.name, year: n.year }))
+        : ordered.map(row => ({ name: row.name, year: String(row.classYear) }));
+
+    if (legsCanonical.length === 0) {
+      ordered.forEach(row => finalResults.push(row));
+      continue;
+    }
+
+    const outLegs = legsCanonical.map(l => ({ ...l }));
+    let newTimeSecs = convertTimeToSeconds(template.time);
     let modified = false;
+    let missingStroke: RelayLegStroke | undefined;
 
-    if (r.relayNames && r.relayNames.length > 0) {
-      const activeNames = [...r.relayNames.map(n => n.name)];
-      
-      const newNames = r.relayNames.map((leg, index) => {
-        if (leg.year === 'SR' || leg.year === 'Sr' || leg.year === 'Senior') {
-          // This senior must be replaced
-          let distance = 100;
-          if (r.event.includes('200')) distance = 50;
-          if (r.event.includes('800')) distance = 200;
-
-          let strokes = ['freestyle', 'free'];
-          if (r.event.toLowerCase().includes('medley')) {
-            if (index === 0) strokes = ['backstroke', 'back'];
-            if (index === 1) strokes = ['breaststroke', 'breast'];
-            if (index === 2) strokes = ['butterfly', 'fly'];
-            if (index === 3) strokes = ['freestyle', 'free'];
-          }
-
-          // We need senior's estimated time to subtract, and replacement's time to add.
-          // Or just find best individual replacement and apply diff.
-          // Since we might not have the senior's individual time, we can just replace the whole relay
-          // But prompt asks to simulate by recalculating splits. 
-          // Let's find the senior's individual time:
-          const seniorIndiv = results.find(s => s.name === leg.name && !s.isRelay && s.event.includes(distance.toString()) && strokes.some(kw => s.event.toLowerCase().includes(kw)));
-          const replacement = getBestTimeForStroke(teamName, distance, strokes, activeNames);
-          
-          if (replacement) {
-            modified = true;
-            activeNames.push(replacement.name); // keep track so we don't reuse same person on same relay
-            
-            if (seniorIndiv) {
-              const diff = convertTimeToSeconds(replacement.time) - convertTimeToSeconds(seniorIndiv.time);
-              newTimeSecs += diff; // if diff is > 0 (replacement slower), relay gets slower
-            } else {
-              // No senior individual time. Just add a generic penalty or guess. 
-              // Usually a senior to a random replacement might be +2 seconds slower.
-              newTimeSecs += 1.5; 
-            }
-            return { name: replacement.name, year: replacement.classYear as string };
-          } else {
-            // Cannot find a replacement. The relay might not be viable, but let's add penalty.
-            newTimeSecs += 3.0; 
-            return { name: 'Unknown', year: '?' };
-          }
-        }
-        return leg;
+    const excludeOthers = (skipIndex: number) => {
+      const s = new Set<string>();
+      outLegs.forEach((ln, i) => {
+        if (i === skipIndex) return;
+        if (ln.name && ln.name !== 'Unknown') s.add(normalizeSwimmerName(ln.name));
       });
+      return s;
+    };
 
-      if (modified) {
-        finalResults.push({
-          ...r,
-          time: formatSecondsToTime(newTimeSecs),
-          relayNames: newNames
-        });
+    for (let index = 0; index < outLegs.length; index++) {
+      const leg = outLegs[index];
+      const isSeniorLeg = leg.year === 'SR' || leg.year === 'Sr' || leg.year === 'Senior';
+      const isDeletedLeg = excluded.has(normalizeSwimmerName(leg.name));
+      const needsReplace = (removeSeniors && isSeniorLeg) || isDeletedLeg;
+      if (!needsReplace) continue;
+
+      const strokes = strokeKeywordsForRelayLeg(evLower, index);
+      const replacement = getBestTimeForStroke(template.team, distance, strokes, excludeOthers(index));
+
+      const legRowForSplit =
+        ordered.find(row => (row.relayLegIndex ?? -1) === index) ?? ordered[index];
+      const oldSplitSec =
+        legRowForSplit?.relayLegSplit && legRowForSplit.relayLegSplit !== 'NT'
+          ? convertTimeToSeconds(legRowForSplit.relayLegSplit)
+          : null;
+
+      const departedIndiv = results.find(
+        s =>
+          !s.isRelay &&
+          s.name === leg.name &&
+          eventMatchesStrokeDistance(s.event, distance, strokes)
+      );
+
+      if (replacement) {
+        modified = true;
+        let delta = 1.5;
+        if (departedIndiv) {
+          delta = convertTimeToSeconds(replacement.time) - convertTimeToSeconds(departedIndiv.time);
+        } else if (oldSplitSec != null && Number.isFinite(oldSplitSec)) {
+          delta = convertTimeToSeconds(replacement.time) - oldSplitSec;
+        }
+        newTimeSecs += delta;
+        outLegs[index] = { name: replacement.name, year: String(replacement.classYear) };
       } else {
-        finalResults.push(r);
+        modified = true;
+        newTimeSecs += 3.0;
+        outLegs[index] = { name: 'Unknown', year: '?' };
+        if (!missingStroke) {
+          missingStroke = relayStrokeForIndex(evLower, index);
+        }
       }
-    } else {
-      // If we don't have relay names... we blindly penalize or skip if no data, 
-      // but prompt implies assume we have names/splits or can simulate finding fastest.
-      // Easiest is to push as-is if no names parsed.
-      finalResults.push(r);
     }
-  });
+
+    const newTeamStr = formatSecondsToTime(newTimeSecs);
+    const missingTag: RelayMissingLeg | undefined = missingStroke
+      ? { stroke: missingStroke, reason: 'no_replacement' }
+      : undefined;
+
+    if (modified) {
+      ordered.forEach(row => {
+        const idx =
+          row.relayLegIndex != null
+            ? Math.min(Math.max(0, row.relayLegIndex), outLegs.length - 1)
+            : Math.min(Math.max(0, ordered.indexOf(row)), outLegs.length - 1);
+        const legMeta = outLegs[idx];
+        finalResults.push({
+          ...row,
+          name: legMeta.name,
+          classYear: legMeta.year,
+          time: newTeamStr,
+          finalsTime: newTeamStr,
+          relayNames: outLegs,
+          relayTeamTime: newTeamStr,
+          relayMissingLeg: missingTag,
+        });
+      });
+    } else {
+      ordered.forEach(row => finalResults.push(row));
+    }
+  }
+
+  // Safety: never drop relay legs if grouping skipped them during iteration
+  const emittedRelayKeys = new Set(finalResults.filter(r => r.isRelay).map(r => relayGroupKey(r)));
+  for (const r of results) {
+    if (!r.isRelay) continue;
+    const k = relayGroupKey(r);
+    if (emittedRelayKeys.has(k)) continue;
+    const group = results.filter(x => x.isRelay && relayGroupKey(x) === k);
+    group.forEach(row => {
+      finalResults.push(row);
+      emittedRelayKeys.add(k);
+    });
+  }
 
   return finalResults;
+}
+
+/** For UI cut badges only: 400 medley leadoff back compares to 100 Backstroke standards (not scored as individual). */
+export function relaySplitQualificationCutEvent(res: SwimmerResult): string | null {
+  if (!res.isRelay || res.relayLegStroke !== 'back') return null;
+  const ev = res.event.toLowerCase();
+  if (!ev.includes('medley')) return null;
+  if (!/\b400\b/.test(ev)) return null;
+  return '100 Backstroke';
 }

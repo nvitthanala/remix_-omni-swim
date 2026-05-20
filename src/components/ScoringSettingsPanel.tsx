@@ -1,10 +1,41 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, Save } from 'lucide-react';
-import { ScoringSettings } from '../types';
+import { ScoringPresetMeta, ScoringSettings } from '../types';
+import { fetchScoringPresetList, fetchScoringPresetSettings } from '../lib/scoringPresets';
+import { mergeScoringSettings } from '../lib/scoringDefaults';
 
-export default function ScoringSettingsPanel({ settings, onSave }: { settings: ScoringSettings, onSave: (s: ScoringSettings) => void }) {
-  const [localSettings, setLocalSettings] = useState<ScoringSettings>(settings);
+type Props = {
+  settings: ScoringSettings;
+  onSave: (s: ScoringSettings) => void;
+  suggestedPresetId?: string | null;
+};
+
+export default function ScoringSettingsPanel({ settings, onSave, suggestedPresetId }: Props) {
+  const [localSettings, setLocalSettings] = useState<ScoringSettings>(() => mergeScoringSettings(settings));
   const [pointsStr, setPointsStr] = useState(settings.scoringPoints.join(', '));
+  const [presets, setPresets] = useState<ScoringPresetMeta[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState('');
+
+  useEffect(() => {
+    setLocalSettings(mergeScoringSettings(settings));
+    setPointsStr(settings.scoringPoints.join(', '));
+  }, [settings]);
+
+  useEffect(() => {
+    fetchScoringPresetList().then(setPresets).catch(() => setPresets([]));
+  }, []);
+
+  const applyPreset = async (presetId: string) => {
+    const next = await fetchScoringPresetSettings(presetId);
+    setLocalSettings(next);
+    setPointsStr(next.scoringPoints.join(', '));
+    setSelectedPreset(presetId);
+  };
+
+  const saveCurrent = () => {
+    const arr = pointsStr.split(',').map(s => parseFloat(s.trim())).filter(n => !Number.isNaN(n));
+    onSave({ ...localSettings, scoringPoints: arr });
+  };
 
   return (
     <div className="surface-card rounded-lg p-5">
@@ -13,64 +44,168 @@ export default function ScoringSettingsPanel({ settings, onSave }: { settings: S
           <Settings size={12} />
           Custom Scoring Logic
         </h4>
-        <button 
-          onClick={() => {
-            const arr = pointsStr.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-            onSave({ ...localSettings, scoringPoints: arr });
-          }}
+        <button
+          type="button"
+          onClick={saveCurrent}
           className="text-[10px] bg-cyan-900/30 text-cyan-400 px-2 py-1 rounded hover:bg-cyan-900/50 transition-colors uppercase font-medium flex items-center gap-1"
         >
           <Save size={10} /> Save
         </button>
       </div>
 
+      {suggestedPresetId && (
+        <div className="mb-4 p-3 rounded border border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-200/90">
+          <span className="uppercase tracking-widest font-medium">Suggested preset: </span>
+          {suggestedPresetId}
+          <button
+            type="button"
+            className="ml-2 underline hover:text-white"
+            onClick={() => applyPreset(suggestedPresetId).then(saveCurrent)}
+          >
+            Load & save
+          </button>
+        </div>
+      )}
+
       <div className="space-y-4">
         <div>
-          <label className="block text-[10px] text-theme-secondary uppercase mb-1">Points Distribution (comma separated)</label>
-          <input 
+          <label className="block text-[10px] text-theme-secondary uppercase mb-1">Scoring preset</label>
+          <select
+            className="glass-input w-full text-xs uppercase"
+            value={selectedPreset}
+            onChange={e => {
+              const id = e.target.value;
+              setSelectedPreset(id);
+              if (id) applyPreset(id);
+            }}
+          >
+            <option value="">Custom (current fields)</option>
+            {presets.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {selectedPreset && presets.find(p => p.id === selectedPreset)?.description && (
+            <p className="text-[9px] text-theme-secondary mt-1 italic">
+              {presets.find(p => p.id === selectedPreset)?.description}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-[10px] text-theme-secondary uppercase mb-1">Points distribution (comma separated)</label>
+          <input
             value={pointsStr}
             onChange={e => setPointsStr(e.target.value)}
             className="glass-input w-full font-mono text-xs"
           />
         </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Relay Multiplier</label>
-            <input 
-              type="number"
-              value={localSettings.relayMultiplier}
-              onChange={e => setLocalSettings({...localSettings, relayMultiplier: parseFloat(e.target.value) || 1})}
-              className="glass-input w-full text-xs"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Half Points for Relay Only</label>
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Scorer cap scope</label>
             <select
-              value={localSettings.halfRateRelaySwimmer ? "yes" : "no"}
-              onChange={e => setLocalSettings({...localSettings, halfRateRelaySwimmer: e.target.value === "yes"})}
               className="glass-input w-full text-xs uppercase"
+              value={localSettings.scorerCapScope ?? 'event'}
+              onChange={e =>
+                setLocalSettings({
+                  ...localSettings,
+                  scorerCapScope: e.target.value as 'meet' | 'event',
+                })
+              }
             >
-              <option value="yes">Yes</option>
-              <option value="no">No</option>
+              <option value="event">Per event</option>
+              <option value="meet">Full meet</option>
             </select>
           </div>
           <div>
-            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max Individual Scorers / Team</label>
-            <input 
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Diver scorer weight</label>
+            <input
               type="number"
-              value={localSettings.maxIndividualScorersPerTeam}
-              onChange={e => setLocalSettings({...localSettings, maxIndividualScorersPerTeam: parseInt(e.target.value) || 4})}
+              step="0.01"
+              min="0"
+              max="1"
+              value={localSettings.diverScorerWeight ?? 1}
+              onChange={e =>
+                setLocalSettings({
+                  ...localSettings,
+                  diverScorerWeight: parseFloat(e.target.value) || 1,
+                })
+              }
               className="glass-input w-full text-xs"
             />
           </div>
           <div>
-            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max Relays Scorers / Team</label>
-            <input 
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max individual scorers / team</label>
+            <input
               type="number"
-              value={localSettings.maxRelaysScoringPerTeam}
-              onChange={e => setLocalSettings({...localSettings, maxRelaysScoringPerTeam: parseInt(e.target.value) || 1})}
+              value={localSettings.maxIndividualScorersPerTeam}
+              onChange={e =>
+                setLocalSettings({
+                  ...localSettings,
+                  maxIndividualScorersPerTeam: parseInt(e.target.value, 10) || 999,
+                })
+              }
               className="glass-input w-full text-xs"
             />
+          </div>
+          <div>
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max scoring relays / team</label>
+            <input
+              type="number"
+              value={localSettings.maxRelaysScoringPerTeam}
+              onChange={e =>
+                setLocalSettings({
+                  ...localSettings,
+                  maxRelaysScoringPerTeam: parseInt(e.target.value, 10) || 999,
+                })
+              }
+              className="glass-input w-full text-xs"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Relay multiplier</label>
+            <input
+              type="number"
+              value={localSettings.relayMultiplier}
+              onChange={e =>
+                setLocalSettings({
+                  ...localSettings,
+                  relayMultiplier: parseFloat(e.target.value) || 1,
+                })
+              }
+              className="glass-input w-full text-xs"
+            />
+          </div>
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-[10px] text-theme-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={localSettings.halfRateRelaySwimmer}
+                onChange={e =>
+                  setLocalSettings({ ...localSettings, halfRateRelaySwimmer: e.target.checked })
+                }
+                className="accent-cyan-400"
+              />
+              Half-rate relay swimmers
+            </label>
+          </div>
+          <div className="col-span-2">
+            <label className="flex items-center gap-2 text-[10px] text-theme-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={localSettings.relayEligibleFromScorerPool === true}
+                onChange={e =>
+                  setLocalSettings({
+                    ...localSettings,
+                    relayEligibleFromScorerPool: e.target.checked,
+                  })
+                }
+                className="accent-cyan-400"
+              />
+              Relays only if all legs are in individual scorer pool
+            </label>
           </div>
         </div>
       </div>

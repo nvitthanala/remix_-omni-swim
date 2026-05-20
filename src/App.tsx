@@ -29,6 +29,7 @@ import { Gender, Workspace, SwimmerResult, Recruit, ClassYear, ScoringSettings }
 import OpsModule from './components/OpsModule';
 import ScoringSettingsModal from './components/ScoringSettingsModal';
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+import { mergeScoringSettings } from './lib/scoringDefaults';
 
 export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -58,16 +59,19 @@ export default function App() {
     try {
       const res = await fetch('/api/workspaces');
       const data = await res.json();
-      setWorkspaces(data);
-      if (data.length > 0 && !activeWorkspaceId) {
-        setActiveWorkspaceId(data[0].id);
-      }
+      const list = Array.isArray(data) ? data : [];
+      setWorkspaces(list);
+      setActiveWorkspaceId(current => {
+        if (list.length === 0) return null;
+        if (current != null && list.some(w => w.id === current)) return current;
+        return list[0].id;
+      });
     } catch (err) {
       console.error('Failed to fetch workspaces', err);
     } finally {
       setIsLoading(false);
     }
-  }, [activeWorkspaceId]);
+  }, []); // Intentionally empty: only bootstrap fetch; selection changes handled separately
 
   useEffect(() => {
     fetchWorkspaces();
@@ -372,7 +376,7 @@ export default function App() {
 
       {showSettingsParamsManager && activeWorkspace && (
         <ScoringSettingsModal 
-          settings={activeWorkspace.scoringSettings || { scoringPoints: [20,17,16,15,14,13,12,11,9,7,6,5,4,3,2,1], relayMultiplier: 2, halfRateRelaySwimmer: true, maxIndividualScorersPerTeam: 4, maxRelaysScoringPerTeam: 1 }}
+          settings={mergeScoringSettings(activeWorkspace.scoringSettings)}
           onSave={(settings) => {
             updateWorkspace({ scoringSettings: settings });
             setShowSettingsParamsManager(false);

@@ -421,6 +421,20 @@ def parse_meet_data(lines, conference="NSISC"):
     
     return athletes
 
+
+def _extract_relay_leg_splits_from_line(stripped):
+    """HyTek relay split line: cumulative clock with leg times in parentheses, e.g. '54.20 (54.20) 1:58.50 (1:04.30)'."""
+    return re.findall(r'\(([\d:\.]+\d)\)', stripped)
+
+
+def _relay_leg_stroke_for_event(event_name, leg_index):
+    """Medley order: back, breast, fly, free. Freestyle relays: every leg is free."""
+    ev = (event_name or '').lower()
+    if 'medley' in ev and leg_index < 4:
+        return ('back', 'breast', 'fly', 'free')[leg_index]
+    return 'free'
+
+
 def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes, conference="NSISC"):
     """Parse NSISC relay line"""
     # Example: "University of West Florida 7:25.38 D2 B	7:29.39	1"
@@ -470,10 +484,14 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
     if rank_match:
         rank = rank_match.group(1)
     
-    # Relay swimmers
+    # Relay swimmers + optional split line (leg times in parentheses).
     relay_names = []
-    for j in range(line_idx + 1, min(len(lines), line_idx + 10)):
+    relay_leg_splits = []
+    j = line_idx + 1
+    end_scan = min(len(lines), line_idx + 12)
+    while j < end_scan:
         nxt = lines[j].strip()
+        j += 1
         if not nxt:
             continue
         # Swimmer line: "1) Shannah Dillman SR 2) Tori Johnston SR ..."
@@ -481,17 +499,17 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
         swimmers = re.findall(r'(\d+)\)\s*(?:r:[\+\-]?\d*\.\d+\s+)?([A-Za-z\-\',\.\s\*#xX%]+?)\s+(FR|SO|JR|SR|5Y|FY|GS|GR)', nxt)
         if swimmers:
             for num, sname, syear in swimmers:
-                # Strip HyTek markers from relay names too
                 sname_clean = re.sub(r'^[\*xX#%]\s*', '', sname.strip())
                 sname_clean = normalize_name(sname_clean)
                 relay_names.append({"name": sname_clean, "year": syear.upper()})
-        elif re.match(r'^[\d:\.]+\s', nxt) and '(' in nxt:
-            continue  # Split times
-        elif nxt.startswith('r:') or nxt.startswith('DQ') or nxt.upper().startswith('EARLY TAKE-OFF'):
             continue
-        else:
+        if re.match(r'^[\d:\.]+\s', nxt) and '(' in nxt:
+            relay_leg_splits = _extract_relay_leg_splits_from_line(nxt)
             break
-    
+        if nxt.startswith('r:') or nxt.startswith('DQ') or nxt.upper().startswith('EARLY TAKE-OFF'):
+            continue
+        break
+
     if relay_names:
         key = (school, current_event, current_gender, current_round, finals_time, rank)
         if key not in athletes:
@@ -503,11 +521,56 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
                 "is_time_trial": current_event_is_time_trial,
                 "rank": rank,
                 "relay_names": relay_names,
+                "relay_leg_splits": relay_leg_splits,
                 "conference": conference
             }
 
 
 _team_cache = None
+
+# School-ish phrases (HyTek school column); avoids caching "First Last" name fragments.
+_INSTITUTION_HINT = re.compile(
+    r'(?i)\b(university|college|colleges|institute|seminary|baptist|methodist|lutheran|'
+    r'catholic|christian|technological|polytechnic|academy|'
+    r'\bstate\b|\bstates\b|st\.|\'\s*s\b|a&m|a & m|'
+    r'\btech\b|\btech\.|national|international)\b'
+)
+
+
+def _looks_like_institution(text):
+    if not text or len(text.strip()) < 3:
+        return False
+    if _INSTITUTION_HINT.search(text):
+        return True
+    for w in text.split():
+        if match_abbrev_team(w):
+            return True
+    return False
+
+
+def _two_title_case_words_only(text):
+    """e.g. 'Lamar Taylor' — typical swimmer name, not a school."""
+    t = text.strip()
+    return bool(re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+$', t))
+
+
+def _school_guess_after_year(after_yr):
+    """Tokens after class year until first time / scratch code (matches individual parse)."""
+    if not after_yr:
+        return ''
+    school_words = []
+    for t in after_yr.split():
+        t_clean = t.lstrip('Xx*#')
+        if is_time(t_clean) or t_clean.upper() in ['NT', 'DQ', 'DFS', 'SCR', 'NS', 'NP'] or t_clean.startswith('---'):
+            break
+        if t in YEAR_TOKENS:
+            school_words.append(t)
+        elif re.match(r'^\d{1,3}$', t) and int(t) <= 40:
+            school_words.append(t)
+        else:
+            school_words.append(t)
+    return ' '.join(school_words).strip()
+
 
 def _build_team_cache(lines):
     """Build a comprehensive team name list from the PDF text"""
@@ -540,17 +603,25 @@ def _build_team_cache(lines):
         before_yr = stripped_clean[:yr_match.start()].strip()
         after_yr = stripped_clean[yr_match.end():].strip()
         
-        # The school can be before or after the year depending on format
-        # Try both
-        for candidate in [before_yr, after_yr]:
-            words = candidate.split()
-            # Try to extract multi-word school name
-            for i in range(len(words), 0, -1):
-                part = ' '.join(words[:i])
-                if len(part) > 3 and not is_time(part):
-                    # Check it doesn't look like a name (unless it contains College/University)
-                    if not re.match(r'^[A-Z][a-z]+,\s*[A-Z]', part) or 'University' in part or 'College' in part:
-                        team_candidates.add(part)
+        # Standard HyTek: school is after class year (before times). Never use name-side prefixes.
+        school_after = _school_guess_after_year(after_yr)
+        if len(school_after) > 2 and not is_time(school_after):
+            team_candidates.add(school_after)
+            # Progressive prefixes help fuzzy match truncated PDF tokens
+            sw = school_after.split()
+            for i in range(1, len(sw)):
+                frag = ' '.join(sw[:i])
+                if len(frag) > 3:
+                    team_candidates.add(frag)
+        
+        # Timed-final / alternate layouts: full school name may appear before the year
+        if _looks_like_institution(before_yr):
+            team_candidates.add(before_yr.strip())
+            bw = before_yr.split()
+            for i in range(1, len(bw)):
+                frag = ' '.join(bw[:i])
+                if len(frag) > 3 and _looks_like_institution(frag):
+                    team_candidates.add(frag)
     
     # Normalize
     canon_map = {}
@@ -605,10 +676,14 @@ def _fuzzy_match_team(candidate):
         if candidate_clean.lower() in t.lower() or t.lower() in candidate_clean.lower():
             return t
     
-    # Fuzzy
+    # Fuzzy — reject cache entries that are just "First Last" person names (poisoned rows)
     matches = difflib.get_close_matches(candidate_clean, _team_cache, n=1, cutoff=0.6)
     if matches:
-        return matches[0]
+        hit = matches[0]
+        if _two_title_case_words_only(hit) and not _looks_like_institution(hit):
+            matches_hi = difflib.get_close_matches(candidate_clean, _team_cache, n=1, cutoff=0.88)
+            return matches_hi[0] if matches_hi else None
+        return hit
     
     return None
 
@@ -643,7 +718,9 @@ def parse_pdf(file_path, format_type='auto'):
     full_text = "\n".join([pt for pt in page_texts if pt])
     lines = full_text.split('\n')
     
-    # Build team cache first
+    # Build team cache first (reset so consecutive parses in one process do not reuse stale names)
+    global _team_cache
+    _team_cache = None
     _build_team_cache(lines)
     
     # Detect conference/format
@@ -662,7 +739,11 @@ def parse_pdf(file_path, format_type='auto'):
     results = []
     for key, data in athletes.items():
         if data["is_relay"] and data.get("relay_names"):
-            for r in data["relay_names"]:
+            relay_names = data["relay_names"]
+            splits = data.get("relay_leg_splits") or []
+            team_time = data["finals_time"]
+            for idx, r in enumerate(relay_names):
+                leg_split = splits[idx] if idx < len(splits) else None
                 results.append({
                     "name": r["name"], "event": data["event"], "gender": data["gender"],
                     "team": data["team"], "year": r["year"], "is_relay": True,
@@ -670,7 +751,12 @@ def parse_pdf(file_path, format_type='auto'):
                     "round_swam": data["round_swam"], "is_exhibition": data["is_exhibition"],
                     "is_time_trial": data.get("is_time_trial", False),
                     "rank": data.get("rank"),
-                    "conference": data.get("conference")
+                    "conference": data.get("conference"),
+                    "relay_names": relay_names,
+                    "relay_leg_index": idx,
+                    "relay_leg_stroke": _relay_leg_stroke_for_event(data["event"], idx),
+                    "relay_leg_split": leg_split,
+                    "relay_team_time": team_time,
                 })
         else:
             results.append({

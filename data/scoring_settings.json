@@ -19,6 +19,14 @@
   ],
   "relayMultiplier": 2,
   "halfRateRelaySwimmer": true,
-  "maxIndividualScorersPerTeam": 4,
-  "maxRelaysScoringPerTeam": 2
+  "maxIndividualScorersPerTeam": 18,
+  "maxRelaysScoringPerTeam": 2,
+  "aFinalBracketSize": 8,
+  "scorerCapScope": "meet",
+  "diverScorerWeight": 0.3333333333333333,
+  "relayEligibleFromScorerPool": true,
+  "diverEventPattern": [
+    "DIVING",
+    "DIVE"
+  ]
 }

@@ -17,7 +17,10 @@ interface Props {
 const EVENTS = [
   '50 Freestyle', '100 Freestyle', '200 Freestyle', '500 Freestyle', '1000 Freestyle', '1650 Freestyle',
   '100 Backstroke', '200 Backstroke', '100 Breaststroke', '200 Breaststroke',
-  '100 Butterfly', '200 Butterfly', '200 IM', '400 IM'
+  '100 Butterfly', '200 Butterfly', '200 IM', '400 IM',
+  '50 Freestyle (Relay split)', '100 Freestyle (Relay split)',
+  '50 Breaststroke (Relay split)', '100 Breaststroke (Relay split)',
+  '50 Butterfly (Relay split)', '100 Butterfly (Relay split)',
 ];
 
 export default function RecruitForm({ gender, teams, onSubmit }: Props) {

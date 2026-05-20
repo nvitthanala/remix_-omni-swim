@@ -10,15 +10,55 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn, execSync } from 'child_process';
-import { Gender, ClassYear, SwimmerResult, Workspace } from './src/types';
+import { Gender, ClassYear, SwimmerResult, Workspace, ScoringSettings } from './src/types';
 
 const PORT = 3000;
 const __filename = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.dirname(__filename);
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 const MEETS_FILE = path.join(DATA_DIR, 'meets.json');
+const SCORING_PRESETS_DIR = path.join(DATA_DIR, 'scoring_presets');
+const SCORING_SETTINGS_FILE = path.join(DATA_DIR, 'scoring_settings.json');
 const PDF_PARSER_SCRIPT = path.join(PROJECT_ROOT, 'backend', 'pdf_parser.py');
 const POINT_CALCULATOR_SCRIPT = path.join(PROJECT_ROOT, 'backend', 'point_calculator.py');
+
+const PRESET_META_KEYS = new Set(['id', 'label', 'description']);
+
+function loadScoringPresetFile(presetId: string): Record<string, unknown> | null {
+  const safeId = presetId.replace(/[^a-zA-Z0-9_-]/g, '');
+  const filePath = path.join(SCORING_PRESETS_DIR, `${safeId}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+}
+
+function stripPresetMeta(raw: Record<string, unknown>) {
+  const settings: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!PRESET_META_KEYS.has(k)) settings[k] = v;
+  }
+  return settings;
+}
+
+function loadDefaultScoringSettings(): ScoringSettings {
+  const generic = loadScoringPresetFile('generic-top16');
+  if (generic) return stripPresetMeta(generic) as unknown as ScoringSettings;
+  if (fs.existsSync(SCORING_SETTINGS_FILE)) {
+    return JSON.parse(fs.readFileSync(SCORING_SETTINGS_FILE, 'utf-8')) as ScoringSettings;
+  }
+  return {
+    scoringPoints: [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1],
+    relayMultiplier: 2,
+    halfRateRelaySwimmer: true,
+    maxIndividualScorersPerTeam: 999,
+    maxRelaysScoringPerTeam: 999,
+    aFinalBracketSize: 8,
+    scorerCapScope: 'event',
+    diverScorerWeight: 1,
+    relayEligibleFromScorerPool: false,
+  };
+}
+
+const defaultScoringSettings = loadDefaultScoringSettings();
 
 function migrateLegacyDataPaths() {
   try {
@@ -129,14 +169,6 @@ async function runPythonScript(scriptPath: string, args: string[], stdin?: strin
   });
 }
 
-const defaultScoringSettings = {
-  scoringPoints: [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1],
-  relayMultiplier: 2,
-  halfRateRelaySwimmer: true,
-  maxIndividualScorersPerTeam: 4,
-  maxRelaysScoringPerTeam: 1,
-};
-
 async function startServer() {
   migrateLegacyDataPaths();
 
@@ -174,6 +206,7 @@ async function startServer() {
       menResults: [],
       womenResults: [],
       recruits: [],
+      deletedSwimmers: [],
       createdAt: Date.now(),
       scoringSettings: defaultScoringSettings,
     };
@@ -194,6 +227,7 @@ async function startServer() {
       menResults: [],
       womenResults: [],
       recruits: [],
+      deletedSwimmers: [],
       createdAt: Date.now(),
       scoringSettings: defaultScoringSettings,
     };
@@ -211,6 +245,40 @@ async function startServer() {
       res.json(workspaces[index]);
     } else {
       res.status(404).json({ error: 'Workspace not found' });
+    }
+  });
+
+  app.get('/api/scoring-presets', (_req, res) => {
+    try {
+      if (!fs.existsSync(SCORING_PRESETS_DIR)) {
+        return res.json([]);
+      }
+      const files = fs.readdirSync(SCORING_PRESETS_DIR).filter(f => f.endsWith('.json'));
+      const list = files.map(f => {
+        const raw = JSON.parse(fs.readFileSync(path.join(SCORING_PRESETS_DIR, f), 'utf-8')) as Record<
+          string,
+          unknown
+        >;
+        const id = (raw.id as string) || f.replace(/\.json$/, '');
+        return {
+          id,
+          label: (raw.label as string) || id,
+          description: (raw.description as string) || undefined,
+        };
+      });
+      res.json(list);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to list scoring presets', details: String(err) });
+    }
+  });
+
+  app.get('/api/scoring-presets/:id', (req, res) => {
+    try {
+      const raw = loadScoringPresetFile(req.params.id);
+      if (!raw) return res.status(404).json({ error: 'Preset not found' });
+      res.json(stripPresetMeta(raw));
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load preset', details: String(err) });
     }
   });
 
@@ -276,7 +344,7 @@ async function startServer() {
         const workspaces = JSON.parse(fs.readFileSync(MEETS_FILE, 'utf-8'));
         const ws = workspaces && workspaces[0] ? workspaces[0] : null;
         const scoring = ws && ws.scoringSettings ? ws.scoringSettings : defaultScoringSettings;
-        fs.writeFileSync(path.join(DATA_DIR, 'scoring_settings.json'), JSON.stringify(scoring, null, 2));
+        fs.writeFileSync(SCORING_SETTINGS_FILE, JSON.stringify(scoring, null, 2));
       } catch (e) {
         console.warn('Could not write data/scoring_settings.json, using defaults.');
       }
@@ -298,6 +366,15 @@ async function startServer() {
         return res.status(500).json({ error: 'Invalid calculation output', details: String(err) });
       }
 
+      if (!Array.isArray(athletes)) {
+        const errMsg =
+          athletes && typeof athletes === 'object' && 'error' in athletes
+            ? String((athletes as { error: unknown }).error)
+            : 'Points calculator did not return an athlete list';
+        responseSent = true;
+        return res.status(500).json({ error: 'Points calculation failed', details: errMsg });
+      }
+
       // Map to frontend structure
       const results: SwimmerResult[] = athletes.map((a: any) => ({
         id: uuidv4(),
@@ -312,14 +389,23 @@ async function startServer() {
         points: a.calculated_points === 'N/A' ? 'N/A' : (a.calculated_points || 0),
         event: a.event,
         gender: a.gender === 'Women' ? Gender.WOMEN : Gender.MEN,
-        isRelay: a.is_relay,
+        isRelay: Boolean(a.is_relay) || /\brelay\b/i.test(String(a.event || '')),
         isExhibition: a.is_exhibition,
         isTimeTrial: a.is_time_trial,
-        relayNames: a.relay_names || []
+        relayNames: a.relay_names || [],
+        relayLegIndex: a.relay_leg_index,
+        relayLegStroke: a.relay_leg_stroke,
+        relayLegSplit: a.relay_leg_split,
+        relayTeamTime: a.relay_team_time,
       }));
 
+      const conference =
+        athletes.length > 0 && typeof athletes[0].conference === 'string'
+          ? athletes[0].conference
+          : undefined;
+
       responseSent = true;
-      res.json({ results });
+      res.json({ results, conference });
     } catch (error: any) {
       console.error('PDF Parse Error:', error);
       if (!responseSent) {

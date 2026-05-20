@@ -8,14 +8,26 @@ import { Trophy, Users, Plus, ChevronDown, TrendingUp, Clock, Briefcase, Search,
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Gender, Workspace, SwimmerResult, Recruit, ClassYear, TeamScore, ScoringSettings } from '../types';
-import { calculatePoints, convertToSCY, getTeamColors, assignTeamLineStyles, simulateRoster } from '../lib/utils';
+import {
+  calculatePoints,
+  convertToSCY,
+  getTeamColors,
+  assignTeamLineStyles,
+  simulateRoster,
+  looksLikeInstitutionTeamName,
+  normalizeSwimmerName,
+  sortEventsByMeetOrder,
+  mergeScoringSettings,
+} from '../lib/utils';
+import { presetIdForConference } from '../lib/scoringDefaults';
 import TeamCard from './TeamCard';
 import RecruitForm from './RecruitForm';
 import ScoringSettingsPanel from './ScoringSettingsPanel';
+import SwimmerDeleteConfirmModal from './SwimmerDeleteConfirmModal';
 
 type TimelineTooltipContentProps = {
   active?: boolean;
-  payload?: any[];
+  payload?: ReadonlyArray<{ name?: string; dataKey?: string; value?: unknown; color?: string }>;
   label?: string;
   teamsWithLineStyles: TeamScore[];
 };
@@ -23,12 +35,12 @@ type TimelineTooltipContentProps = {
 function TimelineTooltipContent({ active, payload, label, teamsWithLineStyles }: TimelineTooltipContentProps) {
   if (!active || !payload?.length) return null;
   const dashByTeam = Object.fromEntries(teamsWithLineStyles.map(t => [t.teamName, t.strokeDasharray]));
-  const rows = payload
-    .map((p: any) => ({
-      name: (p.name ?? p.dataKey) as string,
+  const rows = [...payload]
+    .map(p => ({
+      name: String(p.name ?? p.dataKey ?? ''),
       value: typeof p.value === 'number' ? p.value : Number(p.value),
-      color: p.color as string,
-      strokeDasharray: dashByTeam[(p.name ?? p.dataKey) as string] as string | undefined,
+      color: String(p.color ?? ''),
+      strokeDasharray: dashByTeam[String(p.name ?? p.dataKey ?? '')] as string | undefined,
     }))
     .filter(r => !Number.isNaN(r.value))
     .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
@@ -74,90 +86,143 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
   const [removeSeniors, setRemoveSeniors] = useState(false);
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [pdfFormat, setPdfFormat] = useState('auto');
+  const [swimmerDeleteCandidate, setSwimmerDeleteCandidate] = useState<{ name: string } | null>(null);
+  const [suggestedPresetId, setSuggestedPresetId] = useState<string | null>(() =>
+    presetIdForConference(workspace.conference)
+  );
 
-  // Filter results and recruits by gender
-  const menResults = workspace.menResults ?? [];
-  const womenResults = workspace.womenResults ?? [];
-  const currentResults = gender === Gender.MEN ? menResults : womenResults;
-  const currentRecruits = (workspace.recruits ?? []).filter(r => r.gender === gender);
+  const scoringBundle = useMemo(() => {
+    const menResults = workspace.menResults ?? [];
+    const womenResults = workspace.womenResults ?? [];
+    const currentResults = gender === Gender.MEN ? menResults : womenResults;
+    const currentRecruits = (workspace.recruits ?? []).filter(r => r.gender === gender);
 
-  // Transform recruits into results for scoring
-  const recruitResults: SwimmerResult[] = currentRecruits.map(r => ({
-    id: r.id,
-    rank: 0,
-    name: r.name,
-    classYear: r.classYear,
-    team: r.team,
-    time: convertToSCY(r.time, r.event, r.gender, r.timeType),
-    points: 0,
-    event: r.event,
-    isRecruit: true
-  }));
+    const recruitResults: SwimmerResult[] = currentRecruits.map(r => ({
+      id: r.id,
+      rank: 0,
+      name: r.name,
+      classYear: r.classYear,
+      team: r.team,
+      time: convertToSCY(r.time, r.event, r.gender, r.timeType),
+      points: 0,
+      event: r.event,
+      isRecruit: true,
+    }));
 
-  // Group by event for re-ranking
-  const allResults = simulateRoster(currentResults, recruitResults, removeSeniors);
-  const events = Array.from(new Set(allResults.map(r => r.event)));
+    const excluded = new Set(
+      (workspace.deletedSwimmers ?? [])
+        .filter(d => d.gender === gender)
+        .map(d => normalizeSwimmerName(d.name))
+    );
+    const allResults = simulateRoster(currentResults, recruitResults, removeSeniors, excluded);
+    const scoringSettings = mergeScoringSettings(workspace.scoringSettings);
+    const allScored = calculatePoints(allResults, scoringSettings);
+    const scoredById = new Map(allScored.map(r => [r.id, r]));
+    const events = sortEventsByMeetOrder(Array.from(new Set(allResults.map(r => r.event))));
 
-  // Calculate scores per event and aggregate by team
-  const teamsMap: Record<string, TeamScore> = {};
-  const timelineData: any[] = [];
-  const runningTotals: Record<string, number> = {};
+    const teamsMap: Record<string, TeamScore> = {};
+    const timelineData: any[] = [];
+    const runningTotals: Record<string, number> = {};
 
-  events.forEach(event => {
-    const eventResults = allResults.filter(r => r.event === event);
-    const isTimeTrial = eventResults.some(r => r.isTimeTrial);
-    const scored = calculatePoints(eventResults, workspace.scoringSettings);
-    
-    scored.forEach(res => {
-      const teamKey = String(res.team ?? 'Unknown').trim() || 'Unknown';
-      if (!teamsMap[teamKey]) {
-        teamsMap[teamKey] = {
-          teamName: teamKey,
-          totalPoints: 0,
-          swimmers: [],
-          color: getTeamColors(teamKey).primary,
-        };
-        runningTotals[teamKey] = 0;
-      }
-      const pts = typeof res.points === 'number' ? res.points : 0;
-      teamsMap[teamKey].totalPoints += pts;
-      teamsMap[teamKey].swimmers.push(res);
-      runningTotals[teamKey] += pts;
-    });
-
-    if (!isTimeTrial) {
-      const timelinePoint: any = { 
-          name: event.replace(' Freestyle', ' Free').replace('Individual Medley', 'IM').replace('Backstroke', 'Back').replace('Breaststroke', 'Breast').replace('Butterfly', 'Fly').substring(0, 15), 
-          fullEvent: event 
-      };
-      Object.keys(runningTotals).forEach(team => {
-          timelinePoint[team] = runningTotals[team];
-      });
-      if (Object.keys(runningTotals).length > 0) {
-          timelineData.push(timelinePoint);
-      }
-    }
-  });
-
-  const sortedTeams = Object.values(teamsMap).sort((a, b) => b.totalPoints - a.totalPoints);
-
-  const teamStyleSignature = sortedTeams.map(t => `${t.teamName}:${t.totalPoints}:${t.color}`).join('|');
-  const teamsWithLineStyles = useMemo(() => assignTeamLineStyles(sortedTeams), [teamStyleSignature]);
-
-  const handleAddRecruit = (recruit: Recruit) => {
-    onUpdate({
-      recruits: [...(workspace.recruits ?? []), recruit],
-    });
-    setIsAddingRecruit(false);
-  };
-
-  const topIndividuals = useMemo(() => {
-    let combinedResults: SwimmerResult[] = [];
     events.forEach(event => {
       const eventResults = allResults.filter(r => r.event === event);
-      combinedResults = [...combinedResults, ...calculatePoints(eventResults, workspace.scoringSettings)];
+      const isTimeTrial = eventResults.some(r => r.isTimeTrial);
+      const scored = eventResults.map(r => scoredById.get(r.id) ?? { ...r, points: 0 });
+
+      scored.forEach(res => {
+        const tName = String(res.name ?? '')
+          .trim()
+          .toLowerCase();
+        const tTeam = String(res.team ?? '')
+          .trim()
+          .toLowerCase();
+        if (tName && tTeam === tName && !looksLikeInstitutionTeamName(res.team)) {
+          return;
+        }
+        const teamKey = String(res.team ?? 'Unknown').trim() || 'Unknown';
+        if (!teamsMap[teamKey]) {
+          teamsMap[teamKey] = {
+            teamName: teamKey,
+            totalPoints: 0,
+            swimmers: [],
+            color: getTeamColors(teamKey).primary,
+          };
+          runningTotals[teamKey] = 0;
+        }
+        const pts = typeof res.points === 'number' ? res.points : 0;
+        teamsMap[teamKey].totalPoints += pts;
+        teamsMap[teamKey].swimmers.push(res);
+        runningTotals[teamKey] += pts;
+      });
+
+      if (!isTimeTrial) {
+        const timelinePoint: any = {
+          name: event
+            .replace(' Freestyle', ' Free')
+            .replace('Individual Medley', 'IM')
+            .replace('Backstroke', 'Back')
+            .replace('Breaststroke', 'Breast')
+            .replace('Butterfly', 'Fly')
+            .substring(0, 15),
+          fullEvent: event,
+        };
+        Object.keys(runningTotals).forEach(team => {
+          timelinePoint[team] = runningTotals[team];
+        });
+        if (Object.keys(runningTotals).length > 0) {
+          timelineData.push(timelinePoint);
+        }
+      }
     });
-    // Deduplicate or just take top points? These are individual swims.
+
+    const sortedTeams = Object.values(teamsMap).sort((a, b) => b.totalPoints - a.totalPoints);
+    const teamStyleSignature = sortedTeams.map(t => `${t.teamName}:${t.totalPoints}:${t.color}`).join('|');
+
+    return {
+      allResults,
+      events,
+      sortedTeams,
+      timelineData,
+      teamStyleSignature,
+    };
+  }, [
+    workspace.menResults,
+    workspace.womenResults,
+    workspace.recruits,
+    workspace.deletedSwimmers,
+    workspace.scoringSettings,
+    gender,
+    removeSeniors,
+  ]);
+
+  const confirmDeleteSwimmer = () => {
+    if (!swimmerDeleteCandidate) return;
+    const name = swimmerDeleteCandidate.name;
+    const key = normalizeSwimmerName(name);
+    const field = gender === Gender.MEN ? 'menResults' : 'womenResults';
+    const arr = workspace[field] ?? [];
+    const filtered = arr.filter(r => !(normalizeSwimmerName(r.name) === key && !r.isRelay));
+    const nextDeleted = [...(workspace.deletedSwimmers ?? [])];
+    if (!nextDeleted.some(d => d.gender === gender && normalizeSwimmerName(d.name) === key)) {
+      nextDeleted.push({ name, gender });
+    }
+    const recruitsFiltered = (workspace.recruits ?? []).filter(
+      r => !(r.gender === gender && normalizeSwimmerName(r.name) === key)
+    );
+    onUpdate({ [field]: filtered, recruits: recruitsFiltered, deletedSwimmers: nextDeleted });
+    setSwimmerDeleteCandidate(null);
+  };
+
+  const teamsWithLineStyles = useMemo(
+    () => assignTeamLineStyles(scoringBundle.sortedTeams),
+    [scoringBundle.teamStyleSignature]
+  );
+
+  const topIndividuals = useMemo(() => {
+    const combinedResults = calculatePoints(
+      scoringBundle.allResults,
+      mergeScoringSettings(workspace.scoringSettings)
+    );
     return combinedResults
       .filter(
         r =>
@@ -170,11 +235,20 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
             .includes(searchQuery.toLowerCase())
       )
       .sort((a, b) => {
-      const ptsA = typeof a.points === 'number' ? a.points : 0;
-      const ptsB = typeof b.points === 'number' ? b.points : 0;
-      return ptsB - ptsA;
+        const ptsA = typeof a.points === 'number' ? a.points : 0;
+        const ptsB = typeof b.points === 'number' ? b.points : 0;
+        return ptsB - ptsA;
+      });
+  }, [scoringBundle.allResults, workspace.scoringSettings, searchQuery]);
+
+  const { allResults, events, timelineData } = scoringBundle;
+
+  const handleAddRecruit = (recruit: Recruit) => {
+    onUpdate({
+      recruits: [...(workspace.recruits ?? []), recruit],
     });
-  }, [allResults, events, workspace.scoringSettings, searchQuery]);
+    setIsAddingRecruit(false);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -200,9 +274,14 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
         const parsedMen = data.results.filter((r: any) => r.gender === 'Men');
         const parsedWomen = data.results.filter((r: any) => r.gender === 'Women');
         
-        onUpdate({ 
+        const conference = data.conference ?? workspace.conference;
+        const presetHint = presetIdForConference(conference);
+        if (presetHint) setSuggestedPresetId(presetHint);
+
+        onUpdate({
           menResults: [...(workspace.menResults ?? []), ...parsedMen],
-          womenResults: [...(workspace.womenResults ?? []), ...parsedWomen]
+          womenResults: [...(workspace.womenResults ?? []), ...parsedWomen],
+          conference,
         });
       } finally {
         setIsParsingPdf(false);
@@ -211,9 +290,11 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
     reader.readAsDataURL(file);
   };
 
-  const scoringSettingsObj = workspace.scoringSettings || { scoringPoints: [20,17,16,15,14,13,12,11,9,7,6,5,4,3,2,1], relayMultiplier: 2, halfRateRelaySwimmer: true, maxIndividualScorersPerTeam: 4, maxRelaysScoringPerTeam: 1 };
+  const scoringSettingsObj = mergeScoringSettings(workspace.scoringSettings);
+  const meetConference = workspace.conference;
 
   return (
+    <>
     <div className="grid grid-cols-12 gap-6">
       <div className="col-span-8 space-y-6">
         {/* Timeline Graph */}
@@ -231,7 +312,14 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} />
                 <Tooltip
                   cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 2 }}
-                  content={props => <TimelineTooltipContent {...props} teamsWithLineStyles={teamsWithLineStyles} />}
+                  content={props => (
+                    <TimelineTooltipContent
+                      active={props.active}
+                      label={props.label != null ? String(props.label) : undefined}
+                      payload={props.payload as TimelineTooltipContentProps['payload']}
+                      teamsWithLineStyles={teamsWithLineStyles}
+                    />
+                  )}
                 />
                 {teamsWithLineStyles.map(team => (
                   <Line
@@ -364,10 +452,13 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                   index={index} 
                   gender={gender} 
                   eventsList={events}
+                  conference={meetConference}
                   searchQuery={searchQuery}
+                  onRequestDeleteSwimmer={name => setSwimmerDeleteCandidate({ name })}
                   onUpdateTime={(id, newTime) => {
                     const field = gender === Gender.MEN ? 'menResults' : 'womenResults';
-                    const newArr = workspace[field].map(r => r.id === id ? { ...r, time: newTime } : r);
+                    const arr = workspace[field] ?? [];
+                    const newArr = arr.map(r => (r.id === id ? { ...r, time: newTime } : r));
                     onUpdate({ [field]: newArr });
                   }}
                 />
@@ -450,11 +541,24 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
           </div>
         </div>
 
-        <ScoringSettingsPanel 
-          settings={scoringSettingsObj} 
-          onSave={sets => onUpdate({ scoringSettings: sets })} 
+        <ScoringSettingsPanel
+          settings={scoringSettingsObj}
+          suggestedPresetId={suggestedPresetId}
+          onSave={sets => {
+            onUpdate({ scoringSettings: sets });
+            setSuggestedPresetId(null);
+          }}
         />
       </div>
     </div>
+    {swimmerDeleteCandidate && (
+      <SwimmerDeleteConfirmModal
+        swimmerName={swimmerDeleteCandidate.name}
+        gender={gender}
+        onConfirm={confirmDeleteSwimmer}
+        onCancel={() => setSwimmerDeleteCandidate(null)}
+      />
+    )}
+    </>
   );
 }

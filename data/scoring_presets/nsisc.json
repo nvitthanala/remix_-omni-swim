@@ -1,0 +1,15 @@
+{
+  "id": "nsisc",
+  "label": "NSISC",
+  "description": "16 places; 18 meet-wide scorer units; divers count 1/3; relay legs must be in scorer pool; max 2 scoring relays per team.",
+  "scoringPoints": [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1],
+  "relayMultiplier": 2,
+  "halfRateRelaySwimmer": true,
+  "maxIndividualScorersPerTeam": 18,
+  "maxRelaysScoringPerTeam": 2,
+  "aFinalBracketSize": 8,
+  "scorerCapScope": "meet",
+  "diverScorerWeight": 0.3333333333333333,
+  "relayEligibleFromScorerPool": true,
+  "diverEventPattern": ["DIVING", "DIVE"]
+}
