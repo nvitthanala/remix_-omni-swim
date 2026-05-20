@@ -5,6 +5,7 @@
 
 import {
   Gender,
+  ScorerRosterOverride,
   SwimmerResult,
   Recruit,
   ClassYear,
@@ -13,6 +14,13 @@ import {
   RelayLegStroke,
   RelayMissingLeg,
 } from '../types';
+import {
+  buildScorerRosterLookup,
+  isAbFinalRelayLeg,
+  relayEntryRosterEligible,
+  ScorerRosterLookup,
+  usesScorerRoster,
+} from './scorerRoster';
 import { CONVERSION_FACTORS, SCORING_POINTS } from '../constants';
 import { DEFAULT_SCORING_SETTINGS, mergeScoringSettings } from './scoringDefaults';
 
@@ -321,7 +329,7 @@ export function looksLikeInstitutionTeamName(team: string | null | undefined): b
   return false;
 }
 
-function classifyRoundTier(roundSwam: string | undefined): 'A' | 'B' | 'C' | 'D' | 'PRE' | 'TT' | 'UNK' {
+export function classifyRoundTier(roundSwam: string | undefined): 'A' | 'B' | 'C' | 'D' | 'PRE' | 'TT' | 'UNK' {
   const r = (roundSwam || '').toUpperCase();
   if (r.includes('TIME TRIAL') || r.includes('TIME TRIALS')) return 'TT';
   if (r.includes('C FINAL') || r.includes('C-FINAL') || r.includes('BONUS FINAL')) return 'C';
@@ -498,6 +506,22 @@ function addSwimmerToPool(pool: Map<string, number>, name: string, event: string
   pool.set(key, scorerWeightForEvent(event, settings));
 }
 
+/** Add A/B relay legs to the meet scorer pool so relay-only athletes can score relays (pool rule). */
+function seedAbRelayLegsIntoPool(
+  relayRows: SwimmerResult[],
+  merged: ScoringSettings,
+  meetStates: Map<string, TeamMeetState>
+): void {
+  for (const r of relayRows) {
+    if (!isAbFinalRelayLeg(r, merged)) continue;
+    const team = String(r.team ?? '').trim() || 'Unknown';
+    const meetState = getOrCreateMeetState(meetStates, team, r.gender);
+    if (canAddSwimmerToPool(meetState.poolWeights, r.name, r.event, merged)) {
+      addSwimmerToPool(meetState.poolWeights, r.name, r.event, merged);
+    }
+  }
+}
+
 function getOrCreateMeetState(states: Map<string, TeamMeetState>, team: string, gender: Gender | string | undefined): TeamMeetState {
   const key = teamMeetStateKey(team, gender);
   let s = states.get(key);
@@ -508,11 +532,16 @@ function getOrCreateMeetState(states: Map<string, TeamMeetState>, team: string, 
   return s;
 }
 
+export type CalculatePointsOptions = {
+  scorerRosterOverrides?: ScorerRosterOverride[];
+};
+
 function scoreIndividualsInEvent(
   individuals: SwimmerResult[],
   merged: ScoringSettings,
   meetStates: Map<string, TeamMeetState>,
-  useMeetCaps: boolean
+  useMeetCaps: boolean,
+  rosterLookup?: ScorerRosterLookup
 ): SwimmerResult[] {
   const indivGroups = new Map<string, SwimmerResult[]>();
   for (const r of individuals) {
@@ -579,6 +608,15 @@ function scoreIndividualsInEvent(
     for (const [team, members] of byTeam) {
       const meetState = getOrCreateMeetState(meetStates, team, members[0].gender);
       const uniqueNames = [...new Set(members.map(m => m.name))];
+      const gender = members[0].gender;
+
+      if (rosterLookup && usesScorerRoster(merged)) {
+        const rosterOk = uniqueNames.every(n => rosterLookup.isScorer(n, team, gender));
+        if (!rosterOk) {
+          members.forEach(r => indivOut.push({ ...r, points: 0 }));
+          continue;
+        }
+      }
 
       if (useMeetCaps) {
         const canAllScore = uniqueNames.every(n =>
@@ -602,16 +640,23 @@ function scoreIndividualsInEvent(
   return indivOut;
 }
 
+/** Group relay legs that belong to the same team entry (team time + round + place). */
+function relayScoringGroupKey(r: SwimmerResult): string {
+  const teamTime = r.relayTeamTime || r.finalsTime || r.time;
+  const rk = parseRankInt(r.rank) ?? '';
+  return `${String(r.team ?? '').trim()}|${(r.roundSwam || '').trim()}|${teamTime}|${rk}`;
+}
+
 function scoreRelaysInEvent(
   relays: SwimmerResult[],
   merged: ScoringSettings,
   meetStates: Map<string, TeamMeetState>,
-  useMeetCaps: boolean
+  useMeetCaps: boolean,
+  rosterLookup?: ScorerRosterLookup
 ): SwimmerResult[] {
   const relayMap = new Map<string, SwimmerResult[]>();
   for (const r of relays) {
-    const rk = parseRankInt(r.rank) ?? '';
-    const k = `${r.team}_${(r.roundSwam || '').trim()}_${r.time}_${rk}`;
+    const k = relayScoringGroupKey(r);
     if (!relayMap.has(k)) relayMap.set(k, []);
     relayMap.get(k)!.push(r);
   }
@@ -656,7 +701,12 @@ function scoreRelaysInEvent(
       continue;
     }
 
-    if (useMeetCaps && merged.relayEligibleFromScorerPool === true) {
+    if (rosterLookup && usesScorerRoster(merged)) {
+      if (!relayEntryRosterEligible(group, merged, rosterLookup)) {
+        group.forEach(r => relayOut.push({ ...r, points: 0 }));
+        continue;
+      }
+    } else if (useMeetCaps && merged.relayEligibleFromScorerPool === true) {
       const allInPool = group.every(r => swimmerInPool(meetState.poolWeights, r.name));
       if (!allInPool) {
         group.forEach(r => relayOut.push({ ...r, points: 0 }));
@@ -680,12 +730,20 @@ function scoreRelaysInEvent(
   return relayOut;
 }
 
-export function calculatePoints(results: SwimmerResult[], settings?: ScoringSettings): SwimmerResult[] {
+export function calculatePoints(
+  results: SwimmerResult[],
+  settings?: ScoringSettings,
+  options?: CalculatePointsOptions
+): SwimmerResult[] {
   const merged = mergeScoringSettings(settings);
   const useMeetCaps = merged.scorerCapScope === 'meet' || merged.maxIndividualScorersPerTeam < 999;
 
   const pdfResults = results.filter(r => !r.isRecruit);
   const recruitResults = results.filter(r => r.isRecruit);
+
+  const rosterLookup = usesScorerRoster(merged)
+    ? buildScorerRosterLookup(pdfResults, merged, options?.scorerRosterOverrides)
+    : undefined;
 
   const meetStates = new Map<string, TeamMeetState>();
   const scoredById = new Map<string, SwimmerResult>();
@@ -697,24 +755,59 @@ export function calculatePoints(results: SwimmerResult[], settings?: ScoringSett
       byEvent.get(r.event)!.push(r);
     }
     const sortedEvents = sortEventsByMeetOrder(Array.from(byEvent.keys()));
-    for (const event of sortedEvents) {
+    const relayPoolRule =
+      merged.relayEligibleFromScorerPool === true && !usesScorerRoster(merged);
+
+    // When relays must use the meet-wide individual scorer pool, score ALL individuals first
+    // so early relay events are not evaluated against an empty pool.
+    const runIndividuals = (event: string) => {
       const evRows = byEvent.get(event)!;
-      const individuals = evRows.filter(r => !isRelayResult(r));
-      const relays = evRows.filter(r => isRelayResult(r));
-      for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, true)) {
+      for (const row of scoreIndividualsInEvent(
+        evRows.filter(r => !isRelayResult(r)),
+        merged,
+        meetStates,
+        true,
+        rosterLookup
+      )) {
         scoredById.set(row.id, row);
       }
-      for (const row of scoreRelaysInEvent(relays, merged, meetStates, true)) {
+    };
+    const runRelays = (event: string) => {
+      const evRows = byEvent.get(event)!;
+      for (const row of scoreRelaysInEvent(
+        evRows.filter(r => isRelayResult(r)),
+        merged,
+        meetStates,
+        true,
+        rosterLookup
+      )) {
         scoredById.set(row.id, row);
+      }
+    };
+
+    if (relayPoolRule) {
+      for (const event of sortedEvents) {
+        runIndividuals(event);
+        seedAbRelayLegsIntoPool(
+          (byEvent.get(event) ?? []).filter(r => isRelayResult(r)),
+          merged,
+          meetStates
+        );
+        runRelays(event);
+      }
+    } else {
+      for (const event of sortedEvents) {
+        runIndividuals(event);
+        runRelays(event);
       }
     }
   } else {
     const individuals = pdfResults.filter(r => !isRelayResult(r));
     const relays = pdfResults.filter(r => isRelayResult(r));
-    for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, false)) {
+    for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, false, rosterLookup)) {
       scoredById.set(row.id, row);
     }
-    for (const row of scoreRelaysInEvent(relays, merged, meetStates, false)) {
+    for (const row of scoreRelaysInEvent(relays, merged, meetStates, false, rosterLookup)) {
       scoredById.set(row.id, row);
     }
   }

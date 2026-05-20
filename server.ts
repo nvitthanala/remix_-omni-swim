@@ -344,7 +344,11 @@ async function startServer() {
         const workspaces = JSON.parse(fs.readFileSync(MEETS_FILE, 'utf-8'));
         const ws = workspaces && workspaces[0] ? workspaces[0] : null;
         const scoring = ws && ws.scoringSettings ? ws.scoringSettings : defaultScoringSettings;
-        fs.writeFileSync(SCORING_SETTINGS_FILE, JSON.stringify(scoring, null, 2));
+        const scoringPayload = {
+          ...scoring,
+          scorerRosterOverrides: (ws && ws.scorerRosterOverrides) || [],
+        };
+        fs.writeFileSync(SCORING_SETTINGS_FILE, JSON.stringify(scoringPayload, null, 2));
       } catch (e) {
         console.warn('Could not write data/scoring_settings.json, using defaults.');
       }

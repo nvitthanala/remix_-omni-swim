@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ScoringSettings } from '../types';
+import { ScorerAutoRules, ScoringSettings } from '../types';
 import { SCORING_POINTS } from '../constants';
 
 const TOP16 = [...SCORING_POINTS];
@@ -32,8 +32,22 @@ export const NSISC_PRESET_SETTINGS: ScoringSettings = {
   aFinalBracketSize: 8,
   scorerCapScope: 'meet',
   diverScorerWeight: 1 / 3,
-  relayEligibleFromScorerPool: true,
+  relayEligibleFromScorerPool: false,
+  scorerEligibilityMode: 'roster',
+  scorerAutoRules: {
+    abFinalTiers: ['A', 'B'],
+    includeRelayLegsInFinals: true,
+    distanceFinalRequired: true,
+    distanceEventPattern: ['1000', '1650', '1500'],
+  },
   diverEventPattern: ['DIVING', 'DIVE'],
+};
+
+export const DEFAULT_SCORER_AUTO_RULES: ScorerAutoRules = {
+  abFinalTiers: ['A', 'B'],
+  includeRelayLegsInFinals: true,
+  distanceFinalRequired: true,
+  distanceEventPattern: ['1000', '1650', '1500'],
 };
 
 export const DEFAULT_SCORING_SETTINGS: ScoringSettings = GENERIC_TOP16_SETTINGS;
@@ -51,7 +65,11 @@ export function presetIdForConference(conference?: string): string | null {
 }
 
 export function mergeScoringSettings(settings?: Partial<ScoringSettings>): ScoringSettings {
-  return { ...DEFAULT_SCORING_SETTINGS, ...settings };
+  const merged: ScoringSettings = { ...DEFAULT_SCORING_SETTINGS, ...settings };
+  if (merged.scorerEligibilityMode === 'roster' && !merged.scorerAutoRules) {
+    merged.scorerAutoRules = { ...DEFAULT_SCORER_AUTO_RULES };
+  }
+  return merged;
 }
 
 export function settingsFromPresetPayload(raw: Record<string, unknown>): ScoringSettings {

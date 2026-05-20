@@ -490,6 +490,196 @@ def _meet_state_key(team, gender):
 
 
 
+def _roster_key(team, gender, name):
+
+    return f"{team}|||{gender or ''}|||{_norm_name(name)}"
+
+
+
+
+
+def _distance_for_rules(event_name, rules):
+
+    patterns = (rules or {}).get('distanceEventPattern') or ['1000', '1650', '1500']
+
+    u = (event_name or '').upper()
+
+    return any(str(p).upper() in u for p in patterns)
+
+
+
+
+
+def _row_suggests_scorer(ath, rules):
+
+    if not rules:
+
+        return False
+
+    tiers = rules.get('abFinalTiers') or ['A', 'B']
+
+    tier = classify_round_tier(ath.get('round_swam'))
+
+    if tier not in tiers:
+
+        return False
+
+    if rules.get('distanceFinalRequired') and _distance_for_rules(ath.get('event'), rules):
+
+        if tier == 'PRE':
+
+            return False
+
+    if ath.get('is_relay'):
+
+        return rules.get('includeRelayLegsInFinals', True)
+
+    return True
+
+
+
+
+
+def _build_roster_is_scorer(athletes, cfg):
+
+    rules = _effective_auto_rules(cfg)
+
+    overrides = cfg.get('scorerRosterOverrides') or []
+
+    auto_keys = set()
+
+    for a in athletes:
+
+        if _row_suggests_scorer(a, rules):
+
+            auto_keys.add(_roster_key(a.get('team'), a.get('gender'), a.get('name')))
+
+    manual = {}
+
+    for o in overrides:
+
+        manual[_roster_key(o.get('team'), o.get('gender'), o.get('name'))] = bool(o.get('isScorer'))
+
+    def is_scorer(name, team, gender):
+
+        k = _roster_key(team, gender, name)
+
+        if k in manual:
+
+            return manual[k]
+
+        return k in auto_keys
+
+    return is_scorer
+
+
+
+
+
+def _uses_roster(cfg):
+
+    return cfg.get('scorerEligibilityMode') == 'roster'
+
+
+
+
+
+def _effective_auto_rules(cfg):
+
+    rules = cfg.get('scorerAutoRules')
+
+    if rules:
+
+        return rules
+
+    return {
+
+        'abFinalTiers': ['A', 'B'],
+
+        'includeRelayLegsInFinals': True,
+
+        'distanceFinalRequired': True,
+
+        'distanceEventPattern': ['1000', '1650', '1500'],
+
+    }
+
+
+
+
+
+def _relay_entry_roster_eligible(group, cfg, roster_is_scorer):
+
+    if not _uses_roster(cfg):
+
+        return True
+
+    sample = group[0]
+
+    rules = _effective_auto_rules(cfg)
+
+    tier = classify_round_tier(sample.get('round_swam'))
+
+    tiers = rules.get('abFinalTiers') or ['A', 'B']
+
+    if rules.get('includeRelayLegsInFinals', True) and tier in tiers:
+
+        return True
+
+    if roster_is_scorer is None:
+
+        return False
+
+    team_name = sample.get('team')
+
+    gender = sample.get('gender')
+
+    return all(roster_is_scorer(a.get('name'), team_name, gender) for a in group)
+
+
+
+
+
+def _is_ab_final_relay_leg(ath, cfg):
+
+    if not ath.get('is_relay'):
+
+        return False
+
+    return _row_suggests_scorer(ath, _effective_auto_rules(cfg))
+
+
+
+
+
+def _seed_ab_relay_legs_into_pool(relay_athletes, cfg, meet_states, gender):
+
+    for a in relay_athletes:
+
+        if not _is_ab_final_relay_leg(a, cfg):
+
+            continue
+
+        team_name = a.get('team')
+
+        mkey = _meet_state_key(team_name, gender)
+
+        if mkey not in meet_states:
+
+            meet_states[mkey] = {'pool': {}, 'relays': 0}
+
+        pool = meet_states[mkey]['pool']
+
+        ev_nm = str(a.get('event', '') or '')
+
+        if _can_add_to_pool(pool, a.get('name'), ev_nm, cfg):
+
+            _add_to_pool(pool, a.get('name'), ev_nm, cfg)
+
+
+
+
+
 def calculate_points(athletes, scoring_settings=None):
 
     cfg = _resolve_scoring_settings(scoring_settings)
@@ -506,7 +696,9 @@ def calculate_points(athletes, scoring_settings=None):
 
     use_meet_caps = cfg.get('scorerCapScope') == 'meet' or max_individuals_cfg < 999
 
-    relay_pool_rule = cfg.get('relayEligibleFromScorerPool', False)
+    roster_is_scorer = _build_roster_is_scorer(athletes, cfg) if _uses_roster(cfg) else None
+
+    relay_pool_rule = cfg.get('relayEligibleFromScorerPool', False) and not _uses_roster(cfg)
 
 
 
@@ -560,7 +752,9 @@ def calculate_points(athletes, scoring_settings=None):
 
 
 
-    for (event, gender), ev_athletes in [(k, events[k]) for k in sorted_event_keys]:
+    event_list = [(k, events[k]) for k in sorted_event_keys]
+
+    def _process_scoring_event(ev_athletes, gender):
 
         is_relay = any(a.get('is_relay') for a in ev_athletes)
 
@@ -568,11 +762,10 @@ def calculate_points(athletes, scoring_settings=None):
 
         for a in ev_athletes:
 
-            a['podium'] = 'gold' if str(a.get('rank')) == '1' else \
-
-                          'silver' if str(a.get('rank')) == '2' else \
-
-                          'bronze' if str(a.get('rank')) == '3' else None
+            rk_s = str(a.get('rank'))
+            a['podium'] = (
+                'gold' if rk_s == '1' else 'silver' if rk_s == '2' else 'bronze' if rk_s == '3' else None
+            )
 
             a['cutline_achieved'] = a.get('is_cutline', False)
 
@@ -684,7 +877,19 @@ def calculate_points(athletes, scoring_settings=None):
 
 
 
-                if use_meet_caps and relay_pool_rule:
+                if roster_is_scorer is not None:
+
+                    if not _relay_entry_roster_eligible(group, cfg, roster_is_scorer):
+
+                        for a in group:
+
+                            a['calculated_points'] = 0.0
+
+                        scored_athletes.extend(group)
+
+                        continue
+
+                elif use_meet_caps and relay_pool_rule:
 
                     pool = meet_states[mkey]['pool']
 
@@ -838,6 +1043,30 @@ def calculate_points(athletes, scoring_settings=None):
 
                     mkey = _meet_state_key(team_name, gender)
 
+                    unique_names = list({a.get('name') for a in members})
+
+                    if roster_is_scorer is not None:
+
+                        roster_ok = all(roster_is_scorer(n, team_name, gender) for n in unique_names)
+
+                        for athlete in members:
+
+                            athlete['calculated_points'] = avg_pts if roster_ok else 0.0
+
+                        if roster_ok and use_meet_caps:
+
+                            if mkey not in meet_states:
+
+                                meet_states[mkey] = {'pool': {}, 'relays': 0}
+
+                            pool = meet_states[mkey]['pool']
+
+                            for n in unique_names:
+
+                                _add_to_pool(pool, n, ev_nm, cfg)
+
+                        continue
+
                     if use_meet_caps:
 
                         if mkey not in meet_states:
@@ -845,8 +1074,6 @@ def calculate_points(athletes, scoring_settings=None):
                             meet_states[mkey] = {'pool': {}, 'relays': 0}
 
                         pool = meet_states[mkey]['pool']
-
-                        unique_names = list({a.get('name') for a in members})
 
                         can_all = all(_can_add_to_pool(pool, n, ev_nm, cfg) for n in unique_names)
 
@@ -883,6 +1110,20 @@ def calculate_points(athletes, scoring_settings=None):
                 scored_athletes.extend(group)
 
 
+
+
+    if use_meet_caps and relay_pool_rule:
+        for (event, gender), ev_athletes in event_list:
+            indiv = [a for a in ev_athletes if not a.get('is_relay')]
+            relays = [a for a in ev_athletes if a.get('is_relay')]
+            if indiv:
+                _process_scoring_event(indiv, gender)
+            if relays:
+                _seed_ab_relay_legs_into_pool(relays, cfg, meet_states, gender)
+                _process_scoring_event(relays, gender)
+    else:
+        for (event, gender), ev_athletes in event_list:
+            _process_scoring_event(ev_athletes, gender)
 
     return scored_athletes
 

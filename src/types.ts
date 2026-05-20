@@ -85,8 +85,33 @@ export interface ScoringSettings {
   diverScorerWeight?: number;
   /** Substrings matched against event name to detect diving (default: DIVING, DIVE). */
   diverEventPattern?: string[];
-  /** Relays score only if every leg swimmer is already in the team's scorer pool. */
+  /** Relays score only if every leg swimmer is in the meet individual scorer pool (legacy). */
   relayEligibleFromScorerPool?: boolean;
+  /**
+   * `points_pool` — scorers from individual points + optional relay pool rule.
+   * `roster` — explicit roster table (auto rules + manual overrides); relays use roster only.
+   */
+  scorerEligibilityMode?: 'points_pool' | 'roster';
+  /** Auto-mark scorers from meet swims when using roster mode (conference presets set these). */
+  scorerAutoRules?: ScorerAutoRules;
+}
+
+export interface ScorerAutoRules {
+  /** Final tiers that mark an athlete as a team scorer (default A + B). */
+  abFinalTiers?: Array<'A' | 'B'>;
+  /** Relay legs in those finals count as scorers. */
+  includeRelayLegsInFinals?: boolean;
+  /** Distance events only count when the swim is A/B final, not prelims-only. */
+  distanceFinalRequired?: boolean;
+  distanceEventPattern?: string[];
+}
+
+/** Manual override for team scorer roster (persisted on workspace). */
+export interface ScorerRosterOverride {
+  name: string;
+  team: string;
+  gender: Gender;
+  isScorer: boolean;
 }
 
 export interface ScoringPresetMeta {
@@ -106,6 +131,8 @@ export interface Workspace {
   /** Conference detected from PDF (e.g. NSISC). */
   conference?: string;
   deletedSwimmers?: DeletedSwimmerRef[];
+  /** Manual scorer flags; auto rules fill the rest unless overridden. */
+  scorerRosterOverrides?: ScorerRosterOverride[];
 }
 
 export interface Recruit {

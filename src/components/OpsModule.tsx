@@ -23,6 +23,7 @@ import { presetIdForConference } from '../lib/scoringDefaults';
 import TeamCard from './TeamCard';
 import RecruitForm from './RecruitForm';
 import ScoringSettingsPanel from './ScoringSettingsPanel';
+import ScorerRosterPanel from './ScorerRosterPanel';
 import SwimmerDeleteConfirmModal from './SwimmerDeleteConfirmModal';
 
 type TimelineTooltipContentProps = {
@@ -116,7 +117,9 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
     );
     const allResults = simulateRoster(currentResults, recruitResults, removeSeniors, excluded);
     const scoringSettings = mergeScoringSettings(workspace.scoringSettings);
-    const allScored = calculatePoints(allResults, scoringSettings);
+    const allScored = calculatePoints(allResults, scoringSettings, {
+      scorerRosterOverrides: workspace.scorerRosterOverrides,
+    });
     const scoredById = new Map(allScored.map(r => [r.id, r]));
     const events = sortEventsByMeetOrder(Array.from(new Set(allResults.map(r => r.event))));
 
@@ -221,7 +224,8 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
   const topIndividuals = useMemo(() => {
     const combinedResults = calculatePoints(
       scoringBundle.allResults,
-      mergeScoringSettings(workspace.scoringSettings)
+      mergeScoringSettings(workspace.scoringSettings),
+      { scorerRosterOverrides: workspace.scorerRosterOverrides }
     );
     return combinedResults
       .filter(
@@ -540,6 +544,14 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
             </div>
           </div>
         </div>
+
+        <ScorerRosterPanel
+          results={scoringBundle.allResults}
+          settings={scoringSettingsObj}
+          gender={gender}
+          overrides={workspace.scorerRosterOverrides ?? []}
+          onChangeOverrides={next => onUpdate({ scorerRosterOverrides: next })}
+        />
 
         <ScoringSettingsPanel
           settings={scoringSettingsObj}
