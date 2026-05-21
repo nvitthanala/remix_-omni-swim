@@ -89,7 +89,7 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-backdrop backdrop-blur-sm">
       <div className="surface-card rounded-lg p-6 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] flex flex-col">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-lg font-medium text-[var(--text-primary)] uppercase tracking-tight">Scoring Matrix Configuration</h2>
@@ -206,7 +206,7 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
                 />
               </div>
               <div>
-                <label className="block text-theme-secondary mb-1 text-[10px] uppercase">Max scoring relays</label>
+                <label className="block text-theme-secondary mb-1 text-[10px] uppercase">Max scoring relays / team / relay event</label>
                 <input
                   type="number"
                   value={maxRelaysScoringPerTeam}
@@ -229,11 +229,11 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
               </div>
               <div className="flex flex-col justify-center gap-2">
                 <label className="flex items-center gap-2 text-theme-secondary cursor-pointer text-[10px]">
-                  <input type="checkbox" checked={halfRate} onChange={e => setHalfRate(e.target.checked)} className="accent-cyan-400" />
+                  <input type="checkbox" checked={halfRate} onChange={e => setHalfRate(e.target.checked)} className="accent-[var(--text-accent)]" />
                   Half-rate relay swimmers
                 </label>
                 <label className="flex items-center gap-2 text-theme-secondary cursor-pointer text-[10px]">
-                  <input type="checkbox" checked={relayPool} onChange={e => setRelayPool(e.target.checked)} className="accent-cyan-400" />
+                  <input type="checkbox" checked={relayPool} onChange={e => setRelayPool(e.target.checked)} className="accent-[var(--text-accent)]" />
                   Relay legs must be in scorer pool
                 </label>
               </div>
@@ -242,7 +242,7 @@ export default function ScoringSettingsModal({ settings, onSave, onClose }: Prop
         </div>
 
         <div className="pt-6 mt-2 border-t border-theme-soft flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 hover:bg-white/5 rounded text-theme-secondary transition-colors">
+          <button onClick={onClose} className="px-4 py-2 theme-hover-row rounded text-theme-secondary transition-colors">
             Cancel
           </button>
           <button

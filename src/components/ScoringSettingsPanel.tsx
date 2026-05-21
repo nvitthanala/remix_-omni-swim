@@ -47,19 +47,19 @@ export default function ScoringSettingsPanel({ settings, onSave, suggestedPreset
         <button
           type="button"
           onClick={saveCurrent}
-          className="text-[10px] bg-cyan-900/30 text-cyan-400 px-2 py-1 rounded hover:bg-cyan-900/50 transition-colors uppercase font-medium flex items-center gap-1"
+          className="text-[10px] badge-info px-2 py-1 rounded hover:opacity-90 transition-colors uppercase font-medium flex items-center gap-1"
         >
           <Save size={10} /> Save
         </button>
       </div>
 
       {suggestedPresetId && (
-        <div className="mb-4 p-3 rounded border border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-200/90">
+        <div className="mb-4 p-3 rounded badge-warning text-[10px]">
           <span className="uppercase tracking-widest font-medium">Suggested preset: </span>
           {suggestedPresetId}
           <button
             type="button"
-            className="ml-2 underline hover:text-white"
+            className="ml-2 underline hover:text-[var(--text-primary)]"
             onClick={() => applyPreset(suggestedPresetId).then(saveCurrent)}
           >
             Load & save
@@ -68,6 +68,31 @@ export default function ScoringSettingsPanel({ settings, onSave, suggestedPreset
       )}
 
       <div className="space-y-4">
+        <div>
+          <label className="block text-[10px] text-theme-secondary uppercase mb-1">PDF place points</label>
+          <select
+            className="glass-input w-full text-xs uppercase"
+            value={
+              localSettings.usePdfPlacePoints === true
+                ? 'on'
+                : localSettings.usePdfPlacePoints === false
+                  ? 'off'
+                  : 'auto'
+            }
+            onChange={e => {
+              const v = e.target.value;
+              setLocalSettings({
+                ...localSettings,
+                usePdfPlacePoints: v === 'on' ? true : v === 'off' ? false : 'auto',
+              });
+            }}
+          >
+            <option value="auto">Auto (detect from PDF)</option>
+            <option value="on">On (use HyTek Points column)</option>
+            <option value="off">Off (engine scoring only)</option>
+          </select>
+        </div>
+
         <div>
           <label className="block text-[10px] text-theme-secondary uppercase mb-1">Scoring preset</label>
           <select
@@ -151,7 +176,7 @@ export default function ScoringSettingsPanel({ settings, onSave, suggestedPreset
             />
           </div>
           <div>
-            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max scoring relays / team</label>
+            <label className="block text-[10px] text-theme-secondary uppercase mb-1">Max scoring relays / team / relay event</label>
             <input
               type="number"
               value={localSettings.maxRelaysScoringPerTeam}
@@ -186,7 +211,7 @@ export default function ScoringSettingsPanel({ settings, onSave, suggestedPreset
                 onChange={e =>
                   setLocalSettings({ ...localSettings, halfRateRelaySwimmer: e.target.checked })
                 }
-                className="accent-cyan-400"
+                className="accent-[var(--text-accent)]"
               />
               Half-rate relay swimmers
             </label>
@@ -202,7 +227,7 @@ export default function ScoringSettingsPanel({ settings, onSave, suggestedPreset
                     relayEligibleFromScorerPool: e.target.checked,
                   })
                 }
-                className="accent-cyan-400"
+                className="accent-[var(--text-accent)]"
               />
               Relays only if all legs are in individual scorer pool
             </label>

@@ -40,6 +40,7 @@ const pdfs = [
   '2026_NSISC_Championships_Final_Results.pdf',
   'glvc_results26.pdf',
   'Big_12_S_D_Champ_Results_pdf.pdf',
+  '2026_sec_complete_results.pdf',
 ];
 
 for (const pdf of pdfs) {

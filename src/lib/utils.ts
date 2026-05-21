@@ -22,7 +22,7 @@ import {
   usesScorerRoster,
 } from './scorerRoster';
 import { CONVERSION_FACTORS, SCORING_POINTS } from '../constants';
-import { DEFAULT_SCORING_SETTINGS, mergeScoringSettings } from './scoringDefaults';
+import { DEFAULT_SCORING_SETTINGS, effectivePdfPlacePointsMode, mergeScoringSettings } from './scoringDefaults';
 
 export { DEFAULT_SCORING_SETTINGS, mergeScoringSettings } from './scoringDefaults';
 import teamColorsData from '../team_colors.json';
@@ -229,7 +229,8 @@ export function normalizeSwimmerName(name: string): string {
 }
 
 function relayGroupKey(r: SwimmerResult): string {
-  const t = convertTimeToSeconds(r.time);
+  const clock = relayTeamClock(r) || r.time;
+  const t = convertTimeToSeconds(clock);
   const rk = parseRankInt(r.rank) ?? '';
   const rs = (r.roundSwam || '').trim();
   return `${(r.team || '').trim()}|${r.event}|${rs}|${rk}|${t}`;
@@ -329,7 +330,9 @@ export function looksLikeInstitutionTeamName(team: string | null | undefined): b
   return false;
 }
 
-export function classifyRoundTier(roundSwam: string | undefined): 'A' | 'B' | 'C' | 'D' | 'PRE' | 'TT' | 'UNK' {
+export function classifyRoundTier(
+  roundSwam: string | undefined
+): 'A' | 'B' | 'C' | 'D' | 'PRE' | 'TT' | 'FIN' | 'UNK' {
   const r = (roundSwam || '').toUpperCase();
   if (r.includes('TIME TRIAL') || r.includes('TIME TRIALS')) return 'TT';
   if (r.includes('C FINAL') || r.includes('C-FINAL') || r.includes('BONUS FINAL')) return 'C';
@@ -337,7 +340,8 @@ export function classifyRoundTier(roundSwam: string | undefined): 'A' | 'B' | 'C
   if (r.includes('PRELIM')) return 'PRE';
   if (r.includes('B FINAL') || r.includes('B-FINAL') || r.includes('CONSOLATION')) return 'B';
   if (r.includes('A FINAL') || r.includes('A-FINAL') || r.includes('CHAMPIONSHIP')) return 'A';
-  if (r.includes('FINALS')) return 'A';
+  // HyTek distance timed-finals label (not A/B bracket heats)
+  if (/^FINALS?$/.test(r.trim()) || (/\bFINALS?\b/.test(r) && !/[ABCD]\s*FINAL/.test(r))) return 'FIN';
   return 'UNK';
 }
 
@@ -347,6 +351,12 @@ function isDistanceEvent(event: string | undefined): boolean {
   return /\b(1000|1650|1500|800|10000)\b/.test(u) || u.includes('TIMED');
 }
 
+/** Post-meet championship swims (HyTek Boys/Girls events) — scored like finals, not exhibition TTs. */
+function isChampionshipGenderEvent(event: string | undefined): boolean {
+  if (!event) return false;
+  return /\b(Boys?|Girls?)\b/i.test(event);
+}
+
 function isUnscoredRoundOrEvent(roundSwam: string | undefined, event: string | undefined, settings: ScoringSettings): boolean {
   const r = (roundSwam || '').toUpperCase();
   const e = (event || '').toUpperCase();
@@ -354,16 +364,68 @@ function isUnscoredRoundOrEvent(roundSwam: string | undefined, event: string | u
   for (const ur of list) {
     if (r.includes(ur) || e.includes(ur)) return true;
   }
-  if (e.includes('TIME TRIAL')) return true;
+  if (e.includes('TIME TRIAL') && !isChampionshipGenderEvent(event)) return true;
   return false;
+}
+
+const NON_SCORING_TIME_RE = /^(?:DQ|DFS|SCR|NS|NP|NC|NT|N\/A|---)(?:\b|$)/i;
+
+/** A/B (or timed) championship heats — not prelims or time trials. */
+export function isFinalsRound(roundSwam: string | undefined): boolean {
+  const tier = classifyRoundTier(roundSwam);
+  return tier === 'A' || tier === 'B' || tier === 'FIN';
+}
+
+/** Clock for the round this row represents (prelims row → prelims time; finals → relay/finals clock). */
+export function swimResultClock(
+  r: Pick<SwimmerResult, 'roundSwam' | 'time' | 'finalsTime' | 'prelimsTime' | 'relayTeamTime'>
+): string {
+  if (classifyRoundTier(r.roundSwam) === 'PRE') {
+    return String(r.prelimsTime ?? r.time ?? '').trim();
+  }
+  return String(r.relayTeamTime ?? r.finalsTime ?? r.time ?? '').trim();
+}
+
+/** False for DQ, scratch, DFS, NT, and other non-finish codes (HyTek/PDF). */
+export function isScoringSwimTime(clock: string | null | undefined): boolean {
+  const u = String(clock ?? '').trim();
+  if (!u) return false;
+  return !NON_SCORING_TIME_RE.test(u);
+}
+
+/**
+ * Prelims: non-finish codes on the prelims row do not block scoring eligibility here.
+ * Finals: DQ/SCR/etc. on the finals clock → 0 pts and excluded from tie splits.
+ */
+export function isScoringSwimResult(r: SwimmerResult): boolean {
+  if (!isFinalsRound(r.roundSwam)) return true;
+  return isScoringSwimTime(swimResultClock(r));
 }
 
 function canScoreAthlete(roundSwam: string | undefined, event: string | undefined, settings: ScoringSettings): boolean {
   if (isUnscoredRoundOrEvent(roundSwam, event, settings)) return false;
   const tier = classifyRoundTier(roundSwam);
   if (tier === 'TT' || tier === 'C' || tier === 'D') return false;
-  if (tier === 'PRE') return isDistanceEvent(event);
+  if (tier === 'PRE') return isDistanceEvent(event) || isDivingForSettings(event, settings);
   return true;
+}
+
+/** Prelim diving place points only when the diver did not also score in A/B finals of that event. */
+function athleteHasFinalsDiveInEvent(
+  eventRows: SwimmerResult[],
+  name: string,
+  team: string,
+  settings: ScoringSettings
+): boolean {
+  const n = name.trim();
+  const t = team.trim();
+  return eventRows.some(
+    r =>
+      r.name === n &&
+      String(r.team ?? '').trim() === t &&
+      isDivingForSettings(r.event, settings) &&
+      (classifyRoundTier(r.roundSwam) === 'A' || classifyRoundTier(r.roundSwam) === 'B')
+  );
 }
 
 /** Parse HyTek rank (number or string) for scoring. */
@@ -433,7 +495,7 @@ function scoringRowIndexForRelay(
 
 function roundTierSort(roundSwam: string | undefined): number {
   const t = classifyRoundTier(roundSwam);
-  const order: Record<string, number> = { A: 1, UNK: 1, B: 2, PRE: 3, C: 8, D: 8, TT: 9 };
+  const order: Record<string, number> = { A: 1, FIN: 1, UNK: 1, B: 2, PRE: 3, C: 8, D: 8, TT: 9 };
   return order[t] ?? 5;
 }
 
@@ -462,7 +524,6 @@ export function sortEventsByMeetOrder(events: string[]): string[] {
 
 type TeamMeetState = {
   poolWeights: Map<string, number>;
-  relayUnitsScored: number;
 };
 
 function teamMeetStateKey(team: string, gender: Gender | string | undefined): string {
@@ -526,7 +587,7 @@ function getOrCreateMeetState(states: Map<string, TeamMeetState>, team: string, 
   const key = teamMeetStateKey(team, gender);
   let s = states.get(key);
   if (!s) {
-    s = { poolWeights: new Map(), relayUnitsScored: 0 };
+    s = { poolWeights: new Map() };
     states.set(key, s);
   }
   return s;
@@ -534,13 +595,138 @@ function getOrCreateMeetState(states: Map<string, TeamMeetState>, team: string, 
 
 export type CalculatePointsOptions = {
   scorerRosterOverrides?: ScorerRosterOverride[];
+  /** Forwarded to mergeScoringSettings (NSISC roster coercion vs PDF lock). */
+  conferenceForMerge?: string;
+  /** When omitted, non-recruit rows from `results` are used for PDF-place auto-detect. */
+  resultsForPdfHint?: SwimmerResult[];
 };
+
+/** Distance timed finals (1000/1650 etc.) — one heat, not A/B prelims. */
+function isTimedFinalDistanceHeat(event: string | undefined, roundSwam: string | undefined): boolean {
+  if (!isDistanceEvent(event)) return false;
+  return classifyRoundTier(roundSwam) === 'FIN';
+}
+
+function isTimedFinalDistanceSession(individuals: SwimmerResult[]): boolean {
+  return individuals.length > 0 && individuals.every(r => isTimedFinalDistanceHeat(r.event, r.roundSwam));
+}
+
+/**
+ * Timed-finals distance: place points follow scoring order among finishers who actually earn
+ * points (exhibition, non-roster, and pool-blocked swimmers do not consume ladder slots).
+ */
+function scoreTimedFinalIndividualsInEvent(
+  individuals: SwimmerResult[],
+  merged: ScoringSettings,
+  meetStates: Map<string, TeamMeetState>,
+  useMeetWidePool: boolean,
+  rosterLookup?: ScorerRosterLookup
+): SwimmerResult[] {
+  const pts = merged.scoringPoints;
+  const cap = merged.maxIndividualScorersPerTeam ?? 999;
+  const teamIndivScorers: Record<string, number> = {};
+  const indivOut: SwimmerResult[] = [];
+
+  const byRank = new Map<string, SwimmerResult[]>();
+  for (const r of individuals) {
+    const rk = parseRankInt(r.rank);
+    const key =
+      rk != null && rk > 0 ? String(rk) : `T|${convertTimeToSeconds(r.time)}|${r.name}`;
+    if (!byRank.has(key)) byRank.set(key, []);
+    byRank.get(key)!.push(r);
+  }
+
+  const sortedKeys = Array.from(byRank.keys()).sort((a, b) => {
+    const ra = parseRankInt(byRank.get(a)![0].rank) ?? 9999;
+    const rb = parseRankInt(byRank.get(b)![0].rank) ?? 9999;
+    if (ra !== rb) return ra - rb;
+    return (
+      convertTimeToSeconds(byRank.get(a)![0].time) - convertTimeToSeconds(byRank.get(b)![0].time)
+    );
+  });
+
+  let scoringPlace = 0;
+
+  for (const key of sortedKeys) {
+    const group = byRank.get(key)!;
+    const ineligible = group.filter(r => !isScoringSwimResult(r));
+    ineligible.forEach(r => indivOut.push({ ...r, points: 0 }));
+
+    const eligible = group.filter(r => isScoringSwimResult(r));
+    if (eligible.length === 0) continue;
+
+    const sample = eligible[0];
+    const pointEligible: SwimmerResult[] = [];
+    for (const r of eligible) {
+      const ex = r.isExhibition;
+      const tt = r.isTimeTrial && !isChampionshipGenderEvent(r.event);
+      if (ex || tt || !canScoreAthlete(r.roundSwam, r.event, merged)) {
+        indivOut.push({ ...r, points: 0 });
+        continue;
+      }
+      // Timed-finals distance: place ladder follows meet finish order among legal swims;
+      // roster caps apply via meet-wide pool below, not by skipping ladder slots.
+      pointEligible.push(r);
+    }
+
+    if (pointEligible.length === 0) continue;
+
+    const avail = pts.length - scoringPlace;
+    const take = Math.min(pointEligible.length, avail);
+    const slice = pts.slice(scoringPlace, scoringPlace + take);
+    if (!slice.length) {
+      pointEligible.forEach(r => indivOut.push({ ...r, points: 0 }));
+      continue;
+    }
+    const each = slice.reduce((s, p) => s + p, 0) / pointEligible.length;
+
+    const byTeam = new Map<string, SwimmerResult[]>();
+    for (const r of pointEligible) {
+      const t = String(r.team ?? 'Unknown').trim() || 'Unknown';
+      if (!byTeam.has(t)) byTeam.set(t, []);
+      byTeam.get(t)!.push(r);
+    }
+
+    let anyAwarded = false;
+    for (const [team, members] of byTeam) {
+      const meetState = getOrCreateMeetState(meetStates, team, members[0].gender);
+      const uniqueNames = [...new Set(members.map(m => m.name))];
+      const gender = members[0].gender;
+
+      if (useMeetWidePool) {
+        const canAllScore = uniqueNames.every(n =>
+          canAddSwimmerToPool(meetState.poolWeights, n, sample.event, merged)
+        );
+        for (const r of members) {
+          const award = canAllScore ? each : 0;
+          indivOut.push({ ...r, points: award });
+          if (award > 0) anyAwarded = true;
+        }
+        if (canAllScore) {
+          uniqueNames.forEach(n => addSwimmerToPool(meetState.poolWeights, n, sample.event, merged));
+        }
+      } else if (cap < 999 && (teamIndivScorers[team] || 0) >= cap) {
+        members.forEach(r => indivOut.push({ ...r, points: 0 }));
+      } else {
+        for (const r of members) {
+          indivOut.push({ ...r, points: each });
+        }
+        anyAwarded = true;
+        if (cap < 999) teamIndivScorers[team] = (teamIndivScorers[team] || 0) + uniqueNames.length;
+      }
+    }
+
+    if (anyAwarded) scoringPlace += take;
+  }
+
+  return indivOut;
+}
 
 function scoreIndividualsInEvent(
   individuals: SwimmerResult[],
   merged: ScoringSettings,
   meetStates: Map<string, TeamMeetState>,
-  useMeetCaps: boolean,
+  useMeetWidePool: boolean,
   rosterLookup?: ScorerRosterLookup
 ): SwimmerResult[] {
   const indivGroups = new Map<string, SwimmerResult[]>();
@@ -570,36 +756,43 @@ function scoreIndividualsInEvent(
 
   for (const key of indivSortedKeys) {
     const group = indivGroups.get(key)!;
-    const sample = group[0];
-    const ex = group.some(r => r.isExhibition);
-    const tt = group.some(r => r.isTimeTrial);
+    const ineligible = group.filter(r => !isScoringSwimResult(r));
+    const eligible = group.filter(r => isScoringSwimResult(r));
+    ineligible.forEach(r => indivOut.push({ ...r, points: 0 }));
+    if (eligible.length === 0) continue;
+
+    const sample = eligible[0];
+    const ex = eligible.some(r => r.isExhibition);
+    const tt = eligible.some(r => r.isTimeTrial) && !isChampionshipGenderEvent(sample.event);
 
     if (ex || tt || !canScoreAthlete(sample.roundSwam, sample.event, merged)) {
-      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      eligible.forEach(r => indivOut.push({ ...r, points: 0 }));
       continue;
     }
 
     const rk = parseRankInt(sample.rank);
+    const isPrelimDiving =
+      classifyRoundTier(sample.roundSwam) === 'PRE' && isDivingForSettings(sample.event, merged);
     const baseIdx = rk != null ? scoringRowIndex(sample.roundSwam, rk, sample.event, merged) : null;
     if (baseIdx == null) {
-      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      eligible.forEach(r => indivOut.push({ ...r, points: 0 }));
       continue;
     }
 
     const pts = merged.scoringPoints;
-    const gLen = group.length;
+    const gLen = eligible.length;
     const avail = pts.length - baseIdx;
     const take = Math.min(gLen, avail);
     const slice = pts.slice(baseIdx, baseIdx + take);
     if (!slice.length) {
-      group.forEach(r => indivOut.push({ ...r, points: 0 }));
+      eligible.forEach(r => indivOut.push({ ...r, points: 0 }));
       continue;
     }
     const each = slice.reduce((s, p) => s + p, 0) / gLen;
 
     const cap = merged.maxIndividualScorersPerTeam ?? 999;
     const byTeam = new Map<string, SwimmerResult[]>();
-    for (const r of group) {
+    for (const r of eligible) {
       const t = String(r.team ?? 'Unknown').trim() || 'Unknown';
       if (!byTeam.has(t)) byTeam.set(t, []);
       byTeam.get(t)!.push(r);
@@ -618,21 +811,30 @@ function scoreIndividualsInEvent(
         }
       }
 
-      if (useMeetCaps) {
+      const prelimDiveBlocked = (r: SwimmerResult) =>
+        isPrelimDiving && athleteHasFinalsDiveInEvent(individuals, r.name, team, merged);
+
+      if (useMeetWidePool) {
         const canAllScore = uniqueNames.every(n =>
           canAddSwimmerToPool(meetState.poolWeights, n, sample.event, merged)
         );
         for (const r of members) {
-          indivOut.push({ ...r, points: canAllScore ? each : 0 });
+          const pts = canAllScore && !prelimDiveBlocked(r) ? each : 0;
+          indivOut.push({ ...r, points: pts });
         }
         if (canAllScore) {
-          uniqueNames.forEach(n => addSwimmerToPool(meetState.poolWeights, n, sample.event, merged));
+          uniqueNames
+            .filter(n => !members.some(m => m.name === n && prelimDiveBlocked(m)))
+            .forEach(n => addSwimmerToPool(meetState.poolWeights, n, sample.event, merged));
         }
       } else if (cap < 999 && (teamIndivScorers[team] || 0) >= cap) {
         members.forEach(r => indivOut.push({ ...r, points: 0 }));
       } else {
-        members.forEach(r => indivOut.push({ ...r, points: each }));
-        if (cap < 999) teamIndivScorers[team] = (teamIndivScorers[team] || 0) + uniqueNames.length;
+        members.forEach(r => indivOut.push({ ...r, points: prelimDiveBlocked(r) ? 0 : each }));
+        if (cap < 999) {
+          const added = uniqueNames.filter(n => !members.some(m => m.name === n && prelimDiveBlocked(m))).length;
+          teamIndivScorers[team] = (teamIndivScorers[team] || 0) + added;
+        }
       }
     }
   }
@@ -640,18 +842,34 @@ function scoreIndividualsInEvent(
   return indivOut;
 }
 
-/** Group relay legs that belong to the same team entry (team time + round + place). */
-function relayScoringGroupKey(r: SwimmerResult): string {
-  const teamTime = r.relayTeamTime || r.finalsTime || r.time;
+/** Team relay clock for grouping legs — never use leg split in `time`. */
+export function relayTeamClock(r: SwimmerResult): string {
+  return String(r.relayTeamTime ?? r.finalsTime ?? r.prelimsTime ?? '').trim();
+}
+
+/**
+ * One key per team relay entry (all legs share this). Used for scoring caps and grouping.
+ * Event + team + round + place + team time — not per-leg split times.
+ */
+export function relayEntryGroupKey(r: SwimmerResult): string {
+  const team = String(r.team ?? '').trim();
+  const event = String(r.event ?? '').trim();
+  const round = String(r.roundSwam ?? '').trim();
   const rk = parseRankInt(r.rank) ?? '';
-  return `${String(r.team ?? '').trim()}|${(r.roundSwam || '').trim()}|${teamTime}|${rk}`;
+  const clock = relayTeamClock(r);
+  return `${event}|${team}|${round}|${rk}|${clock}`;
+}
+
+/** @deprecated Use relayEntryGroupKey */
+function relayScoringGroupKey(r: SwimmerResult): string {
+  return relayEntryGroupKey(r);
 }
 
 function scoreRelaysInEvent(
   relays: SwimmerResult[],
   merged: ScoringSettings,
   meetStates: Map<string, TeamMeetState>,
-  useMeetCaps: boolean,
+  useMeetWidePool: boolean,
   rosterLookup?: ScorerRosterLookup
 ): SwimmerResult[] {
   const relayMap = new Map<string, SwimmerResult[]>();
@@ -671,7 +889,8 @@ function scoreRelaysInEvent(
     return convertTimeToSeconds(ra.time) - convertTimeToSeconds(rb.time);
   });
 
-  const teamRelayScorers: Record<string, number> = {};
+  /** Relay cap is per team per relay event (e.g. max 2 scoring entries in 200 Free Relay). */
+  const teamRelayCountsByEvent = new Map<string, number>();
   const relayOut: SwimmerResult[] = [];
 
   for (const key of relayKeys) {
@@ -680,9 +899,10 @@ function scoreRelaysInEvent(
     const ex = group.some(r => r.isExhibition);
     const tt = group.some(r => r.isTimeTrial);
     const team = String(sample.team ?? 'Unknown').trim() || 'Unknown';
+    const eventName = String(sample.event ?? '').trim();
     const meetState = getOrCreateMeetState(meetStates, team, sample.gender);
 
-    if (ex || tt || !canScoreAthlete(sample.roundSwam, sample.event, merged)) {
+    if (ex || tt || !canScoreAthlete(sample.roundSwam, sample.event, merged) || !isScoringSwimResult(sample)) {
       group.forEach(r => relayOut.push({ ...r, points: 0 }));
       continue;
     }
@@ -695,7 +915,8 @@ function scoreRelaysInEvent(
     }
 
     const maxRel = merged.maxRelaysScoringPerTeam ?? 2;
-    const relayCount = useMeetCaps ? meetState.relayUnitsScored : teamRelayScorers[team] || 0;
+    const relayCapKey = `${team}|||${eventName}`;
+    const relayCount = teamRelayCountsByEvent.get(relayCapKey) ?? 0;
     if (relayCount >= maxRel) {
       group.forEach(r => relayOut.push({ ...r, points: 0 }));
       continue;
@@ -706,7 +927,7 @@ function scoreRelaysInEvent(
         group.forEach(r => relayOut.push({ ...r, points: 0 }));
         continue;
       }
-    } else if (useMeetCaps && merged.relayEligibleFromScorerPool === true) {
+    } else if (useMeetWidePool && merged.relayEligibleFromScorerPool === true) {
       const allInPool = group.every(r => swimmerInPool(meetState.poolWeights, r.name));
       if (!allInPool) {
         group.forEach(r => relayOut.push({ ...r, points: 0 }));
@@ -721,8 +942,8 @@ function scoreRelaysInEvent(
       swimmerPts = teamPts / (n >= 4 ? 4 : Math.max(n, 1));
     }
 
-    if (useMeetCaps) meetState.relayUnitsScored += 1;
-    else teamRelayScorers[team] = (teamRelayScorers[team] || 0) + 1;
+    // One relay unit per team entry (4 legs), capped per relay event.
+    teamRelayCountsByEvent.set(relayCapKey, relayCount + 1);
 
     group.forEach(r => relayOut.push({ ...r, points: swimmerPts }));
   }
@@ -730,13 +951,73 @@ function scoreRelaysInEvent(
   return relayOut;
 }
 
+/** Per-row points from HyTek PDF when PDF-place scoring is active (see usePdfPlacePoints). */
+function pdfPlacePointsForRow(row: SwimmerResult): number {
+  if (row.isExhibition) return 0;
+  if (row.isTimeTrial && !isChampionshipGenderEvent(row.event)) return 0;
+  const pp = row.pdfPoints;
+  if (pp != null && Number.isFinite(pp) && pp >= 0) return pp;
+  return 0;
+}
+
 export function calculatePoints(
   results: SwimmerResult[],
   settings?: ScoringSettings,
   options?: CalculatePointsOptions
 ): SwimmerResult[] {
-  const merged = mergeScoringSettings(settings);
-  const useMeetCaps = merged.scorerCapScope === 'meet' || merged.maxIndividualScorersPerTeam < 999;
+  const pdfResultsPre = results.filter(r => !r.isRecruit);
+  const hint = options?.resultsForPdfHint ?? pdfResultsPre;
+  const merged = mergeScoringSettings(settings, {
+    conference: options?.conferenceForMerge,
+    resultsForPdfHint: hint,
+  });
+  const usePdfScoring = effectivePdfPlacePointsMode(merged, hint);
+
+  if (usePdfScoring) {
+    const recruitResults = results.filter(r => r.isRecruit);
+    const pdfResults = pdfResultsPre;
+    const sortedPdf = [...pdfResults].sort((a, b) => {
+      const tw = roundTierSort(a.roundSwam) - roundTierSort(b.roundSwam);
+      if (tw !== 0) return tw;
+      const ra = parseRankInt(a.rank) ?? 9999;
+      const rb = parseRankInt(b.rank) ?? 9999;
+      if (ra !== rb) return ra - rb;
+      return convertTimeToSeconds(a.time) - convertTimeToSeconds(b.time);
+    });
+    const scoredById = new Map<string, SwimmerResult>();
+    for (const r of pdfResults) {
+      scoredById.set(r.id, { ...r, points: pdfPlacePointsForRow(r) });
+    }
+    const sorted: SwimmerResult[] = [];
+    let pdfIdx = 0;
+    recruitResults.sort((a, b) => convertTimeToSeconds(a.time) - convertTimeToSeconds(b.time));
+    for (const recruit of recruitResults) {
+      const recTime = convertTimeToSeconds(recruit.time);
+      while (pdfIdx < sortedPdf.length && convertTimeToSeconds(sortedPdf[pdfIdx].time) <= recTime) {
+        const p = sortedPdf[pdfIdx];
+        sorted.push(scoredById.get(p.id) ?? { ...p, points: 0 });
+        pdfIdx++;
+      }
+      sorted.push({ ...recruit, rank: 0, points: 0 });
+    }
+    while (pdfIdx < sortedPdf.length) {
+      const p = sortedPdf[pdfIdx];
+      sorted.push(scoredById.get(p.id) ?? { ...p, points: 0 });
+      pdfIdx++;
+    }
+    return sorted;
+  }
+
+  const maxIndivCap = merged.maxIndividualScorersPerTeam ?? 999;
+  const maxRelayCap = merged.maxRelaysScoringPerTeam ?? 999;
+  /** 18-scorer pool across the full meet (NSISC); only when scorerCapScope is 'meet'. */
+  const useMeetWideIndividualPool =
+    merged.scorerCapScope === 'meet' && maxIndivCap < 999;
+  const relayPoolRule =
+    merged.relayEligibleFromScorerPool === true && !usesScorerRoster(merged);
+  /** Score each event in meet order (required for meet pool, relay caps, or per-event individual cap). */
+  const processEventsChronologically =
+    useMeetWideIndividualPool || relayPoolRule || maxRelayCap < 999 || maxIndivCap < 999;
 
   const pdfResults = results.filter(r => !r.isRecruit);
   const recruitResults = results.filter(r => r.isRecruit);
@@ -748,27 +1029,23 @@ export function calculatePoints(
   const meetStates = new Map<string, TeamMeetState>();
   const scoredById = new Map<string, SwimmerResult>();
 
-  if (useMeetCaps) {
+  if (processEventsChronologically) {
     const byEvent = new Map<string, SwimmerResult[]>();
     for (const r of pdfResults) {
       if (!byEvent.has(r.event)) byEvent.set(r.event, []);
       byEvent.get(r.event)!.push(r);
     }
     const sortedEvents = sortEventsByMeetOrder(Array.from(byEvent.keys()));
-    const relayPoolRule =
-      merged.relayEligibleFromScorerPool === true && !usesScorerRoster(merged);
 
     // When relays must use the meet-wide individual scorer pool, score ALL individuals first
     // so early relay events are not evaluated against an empty pool.
     const runIndividuals = (event: string) => {
       const evRows = byEvent.get(event)!;
-      for (const row of scoreIndividualsInEvent(
-        evRows.filter(r => !isRelayResult(r)),
-        merged,
-        meetStates,
-        true,
-        rosterLookup
-      )) {
+      const indiv = evRows.filter(r => !isRelayResult(r));
+      const scoreFn = isTimedFinalDistanceSession(indiv)
+        ? scoreTimedFinalIndividualsInEvent
+        : scoreIndividualsInEvent;
+      for (const row of scoreFn(indiv, merged, meetStates, useMeetWideIndividualPool, rosterLookup)) {
         scoredById.set(row.id, row);
       }
     };
@@ -778,7 +1055,7 @@ export function calculatePoints(
         evRows.filter(r => isRelayResult(r)),
         merged,
         meetStates,
-        true,
+        useMeetWideIndividualPool,
         rosterLookup
       )) {
         scoredById.set(row.id, row);
@@ -804,7 +1081,10 @@ export function calculatePoints(
   } else {
     const individuals = pdfResults.filter(r => !isRelayResult(r));
     const relays = pdfResults.filter(r => isRelayResult(r));
-    for (const row of scoreIndividualsInEvent(individuals, merged, meetStates, false, rosterLookup)) {
+    const scoreFn = isTimedFinalDistanceSession(individuals)
+      ? scoreTimedFinalIndividualsInEvent
+      : scoreIndividualsInEvent;
+    for (const row of scoreFn(individuals, merged, meetStates, false, rosterLookup)) {
       scoredById.set(row.id, row);
     }
     for (const row of scoreRelaysInEvent(relays, merged, meetStates, false, rosterLookup)) {

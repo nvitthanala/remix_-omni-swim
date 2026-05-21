@@ -5,10 +5,13 @@ import pdfplumber
 import difflib
 
 def is_time(s):
-    """Check if string is a swimming time"""
+    """Check if string is a swimming time or diving score."""
     s = s.strip().rstrip('.')
     cleaned = re.sub(r'[#\*&$%^!@~\'\+\-qQjJ]', '', s).strip()
     if re.match(r'^\d*:?\d{1,2}\.\d{2}[a-zA-Z\s]*$', cleaned, re.IGNORECASE):
+        return True
+    # Diving totals (e.g. 400.80) — no colon, often 3+ digits before decimal
+    if re.match(r'^\d{2,4}\.\d{2}$', cleaned):
         return True
     return False
 
@@ -27,6 +30,11 @@ YEAR_TOKENS = {'FR', 'SO', 'JR', 'SR', '5Y', 'FY', 'GS', 'GR'}
 YEAR_PATTERN = r'\b(FR|SO|JR|SR|5Y|FY|GS|GR)\b'
 
 QUALIFIER_CODES = r'(NP|NT|DQ|DFS|SCR|NS|NC\b|PROV|D2\s*[AB]|IV25|25D2)'
+
+# Tokens after times that are not place points (SEC / HyTek qualifiers on the points column)
+_POINTS_SKIP_TOKENS = frozenset({
+    'NC', 'PROV', 'NT', 'DQ', 'DFS', 'SCR', 'NS', 'NP', 'A', 'B', 'S', 'R', 'P', 'M',
+})
 
 # Map known abbreviations to full team names
 ABBREV_TEAMS = {
@@ -69,7 +77,7 @@ def is_data_line_text(stripped, is_relay_event=False):
         return False
     if 'NAME' in stripped and 'SCHOOL' in upper:
         return False
-    if 'TEAM RELAY' in upper and 'SEED' in upper:
+    if 'TEAM RELAY' in upper and ('SEED' in upper or 'POINTS' in upper):
         return False
     if 'FINALS TIME' in upper and 'SEED TIME' in upper:
         return False
@@ -138,6 +146,48 @@ def match_abbrev_team(candidate):
             return full
     return None
 
+def is_results_points_header(stripped):
+    """HyTek results table with an explicit Points column (e.g. SEC)."""
+    upper = stripped.upper()
+    if 'TEAM RANKINGS' in upper or 'TEAM SCORES' in upper:
+        return False
+    if 'POINTS' not in upper:
+        return False
+    if re.search(r'\bTEAM\s+RELAY\b', upper):
+        return True
+    if 'NAME' in upper and ('YR' in upper or 'SCHOOL' in upper):
+        return True
+    return False
+
+
+def extract_pdf_points_from_tokens(tokens):
+    """Pop trailing place-point integer(s) from the end of a token list."""
+    if not tokens:
+        return None
+    work = list(tokens)
+    pts = None
+    while work:
+        raw = work[-1].strip()
+        u = re.sub(r'[#\*&$%^!@~\']', '', raw).upper()
+        if not u:
+            work.pop()
+            continue
+        if u in _POINTS_SKIP_TOKENS:
+            work.pop()
+            continue
+        if re.match(r'^D2\s*[AB]$', u) or re.match(r'^IV\d+', u) or re.match(r'^25D2$', u):
+            work.pop()
+            continue
+        if re.match(r'^\d{1,3}$', u):
+            val = int(u)
+            if 0 <= val <= 128:
+                pts = float(val)
+                work.pop()
+                continue
+        break
+    return pts
+
+
 def detect_meet_type(full_text):
     """Detect the format type based on text patterns"""
     lines = full_text.split('\n')
@@ -174,6 +224,7 @@ def parse_meet_data(lines, conference="NSISC"):
     current_round = "Finals"
     current_event_is_time_trial = False
     is_timed_final_event = False
+    meet_has_pdf_points = False
     
     for line_idx, line in enumerate(lines):
         stripped = line.strip()
@@ -186,17 +237,12 @@ def parse_meet_data(lines, conference="NSISC"):
         event_match = re.match(r'^Event\s+(\d+)\s+(Men|Women|Boys?|Girls?|Mixed|Coed|Men\'s|Women\'s)[\'sS]?\s+(.*)', stripped, re.IGNORECASE)
         if event_match:
             event_num = int(event_match.group(1))
-            next_line = lines[line_idx + 1].strip().upper() if line_idx + 1 < len(lines) else ''
-            # Ignore bogus footer event headers that appear as page footer/record lines.
-            # Older parser used a very strict startswith check which missed variants and
-            # accidentally dropped valid event headers. Be more flexible: skip only when
-            # the surrounding text clearly indicates a footer/record (contains NCAA + REC).
-            if event_num in {938, 939} and re.search(r'NCAA\W*D?2?\W*REC', next_line):
-                continue
-            gender_str = event_match.group(2).lower()
-            current_gender = "Women" if any(x in gender_str for x in ["women", "girls"]) else "Men"
+            gender_label = event_match.group(2).strip()
+            gender_str = gender_label.lower()
+            current_gender = "Women" if any(x in gender_str for x in ["women", "girl"]) else "Men"
             event_name = event_match.group(3).strip()
-            current_event = f"Event {event_num} {current_gender} {event_name}"
+            # Preserve Boys/Girls in the event title (post-meet championship swims); bucket athletes by Men/Women.
+            current_event = f"Event {event_num} {gender_label} {event_name}"
             current_event_is_time_trial = 'TIME TRIAL' in event_name.upper()
             current_round = "Time Trial" if current_event_is_time_trial else "Finals"
             
@@ -225,6 +271,10 @@ def parse_meet_data(lines, conference="NSISC"):
         if 'D - FINAL' in upper or upper.startswith('D FINAL'):
             current_round = "D Final"
             continue
+
+        if is_results_points_header(stripped):
+            meet_has_pdf_points = True
+            continue
         
         is_relay = "relay" in current_event.lower() or "free relay" in current_event.lower() or "medley relay" in current_event.lower()
         
@@ -232,7 +282,10 @@ def parse_meet_data(lines, conference="NSISC"):
             # For relays, use relay-aware filter
             if not is_data_line_text(stripped, is_relay_event=True):
                 continue
-            _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes, conference)
+            _parse_nsisc_relay(
+                stripped, lines, line_idx, current_event, current_gender, current_round,
+                current_event_is_time_trial, athletes, conference, meet_has_pdf_points,
+            )
             continue
         
         # ===== INDIVIDUAL Athlete Lines =====
@@ -360,7 +413,11 @@ def parse_meet_data(lines, conference="NSISC"):
         if not school:
             continue
         
-        # Parse times from time_part_tokens
+        pdf_points = None
+        if meet_has_pdf_points:
+            pdf_points = extract_pdf_points_from_tokens(time_part_tokens)
+
+        # Parse times from time_part_tokens (after points tail stripped)
         time_values = []
         for t in time_part_tokens:
             t_stripped = t.strip()
@@ -404,7 +461,8 @@ def parse_meet_data(lines, conference="NSISC"):
                 "round_swam": current_round, "is_exhibition": is_exhibition,
                 "is_time_trial": current_event_is_time_trial,
                 "rank": rank,
-                "conference": conference
+                "conference": conference,
+                "pdf_points": pdf_points,
             }
         else:
             ath = athletes[key]
@@ -418,6 +476,8 @@ def parse_meet_data(lines, conference="NSISC"):
                 ath["rank"] = rank
             if current_round != "Preliminaries":
                 ath["round_swam"] = current_round
+            if pdf_points is not None:
+                ath["pdf_points"] = pdf_points
     
     return athletes
 
@@ -435,7 +495,18 @@ def _relay_leg_stroke_for_event(event_name, leg_index):
     return 'free'
 
 
-def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender, current_round, current_event_is_time_trial, athletes, conference="NSISC"):
+def _parse_nsisc_relay(
+    stripped,
+    lines,
+    line_idx,
+    current_event,
+    current_gender,
+    current_round,
+    current_event_is_time_trial,
+    athletes,
+    conference="NSISC",
+    meet_has_pdf_points=False,
+):
     """Parse NSISC relay line"""
     # Example: "University of West Florida 7:25.38 D2 B	7:29.39	1"
     # In pdfplumber text: "University of West Florida 7:25.38 D2 B 7:29.39 1"
@@ -478,8 +549,14 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
     times = [rest[s:e] for s, e in time_positions]
     finals_time = times[-1] if len(times) >= 2 else (times[0] if times else None)
     
-    # Try to extract rank from the end; fall back to leading lane/rank if needed
     after_times = rest[time_positions[-1][1]:].strip()
+    pdf_team_points = None
+    if meet_has_pdf_points:
+        tail_tokens = after_times.split()
+        pdf_team_points = extract_pdf_points_from_tokens(tail_tokens)
+        after_times = ' '.join(tail_tokens).strip()
+
+    # Try to extract rank from the end; fall back to leading lane/rank if needed
     rank_match = re.search(r'(\d+)\s*$', after_times)
     if rank_match:
         rank = rank_match.group(1)
@@ -513,6 +590,9 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
     if relay_names:
         key = (school, current_event, current_gender, current_round, finals_time, rank)
         if key not in athletes:
+            leg_pdf_pts = None
+            if pdf_team_points is not None and len(relay_names) > 0:
+                leg_pdf_pts = pdf_team_points / len(relay_names)
             athletes[key] = {
                 "name": school, "event": current_event, "gender": current_gender,
                 "team": school, "year": "UNKNOWN", "is_relay": True,
@@ -522,7 +602,9 @@ def _parse_nsisc_relay(stripped, lines, line_idx, current_event, current_gender,
                 "rank": rank,
                 "relay_names": relay_names,
                 "relay_leg_splits": relay_leg_splits,
-                "conference": conference
+                "conference": conference,
+                "pdf_team_points": pdf_team_points,
+                "pdf_points": leg_pdf_pts,
             }
 
 
@@ -729,6 +811,10 @@ def parse_pdf(file_path, format_type='auto'):
         conference = 'NSISC'
     elif 'ACC' in full_text.upper() or 'ATLANTIC COAST' in full_text.upper():
         conference = 'ACC'
+    elif re.search(r'\bSEC\b', full_text.upper()) or 'SOUTHEASTERN CONFERENCE' in full_text.upper():
+        conference = 'SEC'
+    elif 'BIG 12' in full_text.upper() or 'BIG12' in full_text.upper():
+        conference = 'Big 12'
     
     meet_type = detect_meet_type(full_text)
     
@@ -744,6 +830,7 @@ def parse_pdf(file_path, format_type='auto'):
             team_time = data["finals_time"]
             for idx, r in enumerate(relay_names):
                 leg_split = splits[idx] if idx < len(splits) else None
+                leg_pts = data.get("pdf_points")
                 results.append({
                     "name": r["name"], "event": data["event"], "gender": data["gender"],
                     "team": data["team"], "year": r["year"], "is_relay": True,
@@ -757,6 +844,7 @@ def parse_pdf(file_path, format_type='auto'):
                     "relay_leg_stroke": _relay_leg_stroke_for_event(data["event"], idx),
                     "relay_leg_split": leg_split,
                     "relay_team_time": team_time,
+                    "pdf_points": leg_pts,
                 })
         else:
             results.append({
@@ -766,7 +854,8 @@ def parse_pdf(file_path, format_type='auto'):
                 "round_swam": data["round_swam"], "is_exhibition": data["is_exhibition"],
                 "is_time_trial": data.get("is_time_trial", False),
                 "rank": data.get("rank"),
-                "conference": data.get("conference")
+                "conference": data.get("conference"),
+                "pdf_points": data.get("pdf_points"),
             })
     
     print(json.dumps(results))

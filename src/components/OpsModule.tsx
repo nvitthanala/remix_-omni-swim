@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { Trophy, Users, Plus, ChevronDown, TrendingUp, Clock, Briefcase, Search, UserMinus } from 'lucide-react';
+import { Trophy, Users, Plus, ChevronDown, TrendingUp, Clock, Briefcase, Search, UserMinus, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Gender, Workspace, SwimmerResult, Recruit, ClassYear, TeamScore, ScoringSettings } from '../types';
@@ -18,13 +18,21 @@ import {
   normalizeSwimmerName,
   sortEventsByMeetOrder,
   mergeScoringSettings,
+  isRelayResult,
 } from '../lib/utils';
-import { presetIdForConference } from '../lib/scoringDefaults';
+import {
+  applyPdfPlacePointsNeutralCaps,
+  NSISC_PRESET_SETTINGS,
+  presetIdForConference,
+  resultsHavePdfPlacePoints,
+} from '../lib/scoringDefaults';
+import { aggregateSwimmerMeetPoints, scorerRosterKey } from '../lib/scorerRoster';
 import TeamCard from './TeamCard';
 import RecruitForm from './RecruitForm';
 import ScoringSettingsPanel from './ScoringSettingsPanel';
 import ScorerRosterPanel from './ScorerRosterPanel';
 import SwimmerDeleteConfirmModal from './SwimmerDeleteConfirmModal';
+import { useThemeColors } from '../lib/useThemeColors';
 
 type TimelineTooltipContentProps = {
   active?: boolean;
@@ -46,13 +54,13 @@ function TimelineTooltipContent({ active, payload, label, teamsWithLineStyles }:
     .filter(r => !Number.isNaN(r.value))
     .sort((a, b) => b.value - a.value || a.name.localeCompare(b.name));
   return (
-    <div className="bg-[#0c0f16] border border-gray-700 rounded-lg p-2.5 shadow-xl max-w-xs">
-      <div className="text-rose-400 font-bold mb-2 text-[10px] uppercase tracking-wide border-b border-gray-800 pb-1">
+    <div className="theme-popover rounded-lg p-2.5 max-w-xs">
+      <div className="text-[var(--text-accent)] font-bold mb-2 text-[10px] uppercase tracking-wide border-b border-theme-soft pb-1">
         {label}
       </div>
       <ul className="space-y-1 font-mono text-[10px]">
         {rows.map(r => (
-          <li key={r.name} className="flex items-center justify-between gap-4 text-gray-200">
+          <li key={r.name} className="flex items-center justify-between gap-4 text-[var(--text-primary)]">
             <span className="flex items-center gap-2 min-w-0">
               <svg width="22" height="8" className="shrink-0" aria-hidden>
                 <line
@@ -67,7 +75,7 @@ function TimelineTooltipContent({ active, payload, label, teamsWithLineStyles }:
               </svg>
               <span className="truncate">{r.name}</span>
             </span>
-            <span className="text-emerald-400 font-bold shrink-0">{r.value.toFixed(1)}</span>
+            <span className="text-points-positive font-bold shrink-0">{r.value.toFixed(1)}</span>
           </li>
         ))}
       </ul>
@@ -82,6 +90,7 @@ interface Props {
 }
 
 export default function OpsModule({ workspace, gender, onUpdate }: Props) {
+  const chartTheme = useThemeColors();
   const [isAddingRecruit, setIsAddingRecruit] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [removeSeniors, setRemoveSeniors] = useState(false);
@@ -91,6 +100,8 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
   const [suggestedPresetId, setSuggestedPresetId] = useState<string | null>(() =>
     presetIdForConference(workspace.conference)
   );
+  const [whatIfMode, setWhatIfMode] = useState(false);
+  const [scoringRefreshKey, setScoringRefreshKey] = useState(0);
 
   const scoringBundle = useMemo(() => {
     const menResults = workspace.menResults ?? [];
@@ -116,9 +127,15 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
         .map(d => normalizeSwimmerName(d.name))
     );
     const allResults = simulateRoster(currentResults, recruitResults, removeSeniors, excluded);
-    const scoringSettings = mergeScoringSettings(workspace.scoringSettings);
+    const pdfHint = [...(workspace.menResults ?? []), ...(workspace.womenResults ?? [])];
+    const scoringSettings = mergeScoringSettings(workspace.scoringSettings, {
+      conference: workspace.conference,
+      resultsForPdfHint: pdfHint,
+    });
     const allScored = calculatePoints(allResults, scoringSettings, {
       scorerRosterOverrides: workspace.scorerRosterOverrides,
+      conferenceForMerge: workspace.conference,
+      resultsForPdfHint: pdfHint,
     });
     const scoredById = new Map(allScored.map(r => [r.id, r]));
     const events = sortEventsByMeetOrder(Array.from(new Set(allResults.map(r => r.event))));
@@ -183,6 +200,7 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
 
     return {
       allResults,
+      allScored,
       events,
       sortedTeams,
       timelineData,
@@ -194,8 +212,10 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
     workspace.recruits,
     workspace.deletedSwimmers,
     workspace.scoringSettings,
+    workspace.scorerRosterOverrides,
     gender,
     removeSeniors,
+    scoringRefreshKey,
   ]);
 
   const confirmDeleteSwimmer = () => {
@@ -221,29 +241,35 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
     [scoringBundle.teamStyleSignature]
   );
 
-  const topIndividuals = useMemo(() => {
-    const combinedResults = calculatePoints(
-      scoringBundle.allResults,
-      mergeScoringSettings(workspace.scoringSettings),
-      { scorerRosterOverrides: workspace.scorerRosterOverrides }
-    );
-    return combinedResults
+  const topContributors = useMemo(() => {
+    const scored = scoringBundle.allScored;
+    const totals = aggregateSwimmerMeetPoints(scored, gender);
+    const meta = new Map<string, { name: string; team: string; classYear: string }>();
+
+    for (const r of scored) {
+      if (r.isRecruit) continue;
+      if (r.gender !== gender) continue;
+      if (isRelayResult(r) && r.name === r.team) continue;
+      const team = String(r.team ?? '').trim() || 'Unknown';
+      const key = scorerRosterKey(team, r.gender ?? gender, r.name);
+      if (!meta.has(key)) {
+        meta.set(key, { name: r.name, team, classYear: String(r.classYear ?? '') });
+      }
+    }
+
+    const q = searchQuery.trim().toLowerCase();
+    return [...totals.entries()]
+      .map(([key, meetPts]) => ({ key, meetPts, ...meta.get(key)! }))
+      .filter(row => meta.has(row.key))
       .filter(
-        r =>
-          !searchQuery ||
-          String(r.name ?? '')
-            .toLowerCase()
-            .includes(searchQuery.toLowerCase()) ||
-          String(r.team ?? '')
-            .toLowerCase()
-            .includes(searchQuery.toLowerCase())
+        row =>
+          !q ||
+          row.name.toLowerCase().includes(q) ||
+          row.team.toLowerCase().includes(q)
       )
-      .sort((a, b) => {
-        const ptsA = typeof a.points === 'number' ? a.points : 0;
-        const ptsB = typeof b.points === 'number' ? b.points : 0;
-        return ptsB - ptsA;
-      });
-  }, [scoringBundle.allResults, workspace.scoringSettings, searchQuery]);
+      .sort((a, b) => b.meetPts - a.meetPts || a.name.localeCompare(b.name))
+      .slice(0, 10);
+  }, [scoringBundle.allScored, gender, searchQuery, scoringRefreshKey]);
 
   const { allResults, events, timelineData } = scoringBundle;
 
@@ -282,19 +308,53 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
         const presetHint = presetIdForConference(conference);
         if (presetHint) setSuggestedPresetId(presetHint);
 
+        const allParsed = [...parsedMen, ...parsedWomen] as SwimmerResult[];
+        let scoringPatch: ScoringSettings | undefined;
+        if (resultsHavePdfPlacePoints(allParsed)) {
+          scoringPatch = mergeScoringSettings(
+            {
+              ...workspace.scoringSettings,
+              usePdfPlacePoints: true,
+              scorerEligibilityMode: 'points_pool',
+              scorerAutoRules: undefined,
+              ...applyPdfPlacePointsNeutralCaps(
+                mergeScoringSettings(workspace.scoringSettings, { conference })
+              ),
+            },
+            { conference, resultsForPdfHint: allParsed }
+          );
+        } else if (presetHint === 'nsisc') {
+          scoringPatch = mergeScoringSettings(
+            {
+              ...NSISC_PRESET_SETTINGS,
+              ...workspace.scoringSettings,
+              scorerEligibilityMode: 'roster',
+            },
+            { conference }
+          );
+        }
+
         onUpdate({
-          menResults: [...(workspace.menResults ?? []), ...parsedMen],
-          womenResults: [...(workspace.womenResults ?? []), ...parsedWomen],
+          menResults: parsedMen,
+          womenResults: parsedWomen,
+          deletedSwimmers: [],
+          scorerRosterOverrides: [],
           conference,
+          ...(scoringPatch ? { scoringSettings: scoringPatch } : {}),
         });
+        setScoringRefreshKey(k => k + 1);
       } finally {
         setIsParsingPdf(false);
+        e.target.value = '';
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const scoringSettingsObj = mergeScoringSettings(workspace.scoringSettings);
+  const scoringSettingsObj = mergeScoringSettings(workspace.scoringSettings, {
+    conference: workspace.conference,
+    resultsForPdfHint: [...(workspace.menResults ?? []), ...(workspace.womenResults ?? [])],
+  });
   const meetConference = workspace.conference;
 
   return (
@@ -304,16 +364,16 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
         {/* Timeline Graph */}
         <div className="surface-card rounded-lg p-5 mb-6">
           <div className="flex items-center gap-2 mb-4">
-            <TrendingUp size={16} className="text-rose-400" />
+            <TrendingUp size={16} className="text-[var(--text-accent)]" />
             <h3 className="text-[12px] font-bold text-[var(--text-primary)] uppercase tracking-tight">Chronological Team Score Timeline</h3>
           </div>
           
           <div className="h-64 w-full surface-overlay p-2 rounded border border-theme-soft">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={timelineData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 9, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} interval="preserveStartEnd" />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.chartGrid} vertical={false} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: chartTheme.chartTick, fontSize: 9, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} interval="preserveStartEnd" />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: chartTheme.chartTick, fontSize: 10, fontStyle: 'bold', fontFamily: 'JetBrains Mono' }} />
                 <Tooltip
                   cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 2 }}
                   content={props => (
@@ -388,8 +448,9 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 />
               </div>
               <button 
-                onClick={() => setRemoveSeniors(!removeSeniors)}
-                className={`flex items-center gap-2 px-3 py-1.5 border rounded text-[10px] uppercase font-medium transition-all ${
+                onClick={() => whatIfMode && setRemoveSeniors(!removeSeniors)}
+                disabled={!whatIfMode}
+                className={`flex items-center gap-2 px-3 py-1.5 border rounded text-[10px] uppercase font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                   removeSeniors 
                     ? 'bg-[var(--text-accent)]/20 border-[var(--text-accent)]/40 text-[var(--text-accent)]' 
                     : 'surface-muted-bg border-theme-soft text-theme-secondary hover:text-[var(--text-primary)]'
@@ -400,14 +461,14 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 <span>- Class of SR</span>
               </button>
               {isParsingPdf ? (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-rose-900/20 border border-rose-400/30 rounded text-[10px] uppercase font-medium text-rose-400">
+                <div className="flex items-center gap-2 px-3 py-1.5 btn-accent-outline rounded text-[10px] uppercase font-medium">
                   <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}>
                     <Plus size={12} className="opacity-50" />
                   </motion.div>
                   <span>Parsing PDF...</span>
-                  <div className="w-16 h-1 bg-rose-900/50 rounded overflow-hidden ml-2">
+                  <div className="w-16 h-1 bg-[var(--text-accent)]/20 rounded overflow-hidden ml-2">
                     <motion.div 
-                      className="h-full bg-rose-400"
+                      className="h-full bg-[var(--text-accent)]"
                       initial={{ width: "0%" }}
                       animate={{ width: "100%" }}
                       transition={{ duration: 15, ease: "easeOut" }}
@@ -426,7 +487,7 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                     <option value="regular">Regular List</option>
                     <option value="divided">Divided (2-Col)</option>
                   </select>
-                  <label className="cursor-pointer flex items-center gap-1.5 px-3 py-1 bg-rose-900/20 hover:bg-rose-900/40 border border-rose-400/30 rounded-sm text-[10px] uppercase font-medium text-rose-400 transition-all">
+                  <label className="cursor-pointer flex items-center gap-1.5 px-3 py-1 btn-accent-outline rounded-sm text-[10px] uppercase font-medium transition-all">
                     <Plus size={12} />
                     <span>Load PDF</span>
                     <input type="file" className="hidden" accept=".pdf" onChange={handleFileUpload} />
@@ -458,13 +519,19 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                   eventsList={events}
                   conference={meetConference}
                   searchQuery={searchQuery}
-                  onRequestDeleteSwimmer={name => setSwimmerDeleteCandidate({ name })}
-                  onUpdateTime={(id, newTime) => {
-                    const field = gender === Gender.MEN ? 'menResults' : 'womenResults';
-                    const arr = workspace[field] ?? [];
-                    const newArr = arr.map(r => (r.id === id ? { ...r, time: newTime } : r));
-                    onUpdate({ [field]: newArr });
-                  }}
+                  onRequestDeleteSwimmer={
+                    whatIfMode ? name => setSwimmerDeleteCandidate({ name }) : undefined
+                  }
+                  onUpdateTime={
+                    whatIfMode
+                      ? (id, newTime) => {
+                          const field = gender === Gender.MEN ? 'menResults' : 'womenResults';
+                          const arr = workspace[field] ?? [];
+                          const newArr = arr.map(r => (r.id === id ? { ...r, time: newTime } : r));
+                          onUpdate({ [field]: newArr });
+                        }
+                      : undefined
+                  }
                 />
               ))
             ) : (
@@ -488,23 +555,31 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
                 <th className="p-3">Athlete Name</th>
                 <th className="p-3">Team</th>
                 <th className="p-3">Class</th>
-                <th className="p-3 text-right">Proj Pts</th>
+                <th className="p-3 text-right">Meet pts</th>
               </tr>
             </thead>
             <tbody className="text-xs font-mono">
-              {topIndividuals.length > 0 ? (
-                topIndividuals.slice(0, 10).map((res, i) => (
-                  <tr key={res.id || i} className="border-b border-theme-soft hover:bg-white/5 transition-colors">
+              {topContributors.length > 0 ? (
+                topContributors.map((row, i) => (
+                  <tr key={row.key} className="border-b border-theme-soft theme-hover-row transition-colors">
                     <td className="p-3 text-theme-secondary">{i + 1}</td>
-                    <td className="p-3 font-sans font-medium text-[var(--text-primary)]">{res.name}</td>
-                    <td className="p-3">{res.team}</td>
-                    <td className="p-3"><span className="px-1.5 py-0.5 rounded surface-overlay border border-theme-soft">{res.classYear}</span></td>
-                    <td className="p-3 text-right text-[var(--text-accent)] font-medium">{typeof res.points === 'number' ? res.points.toFixed(1) : res.points}</td>
+                    <td className="p-3 font-sans font-medium text-[var(--text-primary)]">{row.name}</td>
+                    <td className="p-3 text-theme-secondary">{row.team}</td>
+                    <td className="p-3">
+                      {row.classYear ? (
+                        <span className="px-1.5 py-0.5 rounded surface-overlay border border-theme-soft">{row.classYear}</span>
+                      ) : (
+                        <span className="text-theme-muted">—</span>
+                      )}
+                    </td>
+                    <td className={`p-3 text-right font-medium ${row.meetPts > 0 ? 'text-points-positive' : 'text-theme-secondary'}`}>
+                      {row.meetPts.toFixed(1)}
+                    </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500 italic">No athlete data available in current matrix</td>
+                  <td colSpan={5} className="p-8 text-center text-theme-muted italic">No athlete data available in current matrix</td>
                 </tr>
               )}
             </tbody>
@@ -516,10 +591,38 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
       <div className="col-span-4 space-y-6">
         <div className="surface-card rounded-lg p-5">
           <h3 className="text-sm font-medium text-[var(--text-accent)] uppercase tracking-widest mb-4">Recruit Projection Matrix</h3>
+          <label className="flex items-start gap-3 mb-4 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={whatIfMode}
+              onChange={e => setWhatIfMode(e.target.checked)}
+              className="mt-0.5 accent-[var(--text-accent)] shrink-0"
+            />
+            <span>
+              <span className="block text-[10px] font-bold uppercase tracking-widest text-[var(--text-primary)] group-hover:text-[var(--text-accent)] transition-colors">
+                What-if mode
+              </span>
+              <span className="block text-[9px] text-theme-secondary leading-relaxed mt-0.5">
+                {whatIfMode
+                  ? 'Editing enabled — roster, matrix times, recruits, and senior removal.'
+                  : 'Observe only — enable to edit roster and matrix.'}
+              </span>
+            </span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setScoringRefreshKey(k => k + 1)}
+            className="w-full mb-4 flex items-center justify-center gap-2 py-2.5 btn-accent-outline rounded text-[10px] font-bold uppercase tracking-widest cursor-pointer transition-all"
+            title="Recalculate matrix, timeline, and roster points from current data and settings"
+          >
+            <RefreshCw size={12} />
+            Reload scoring
+          </button>
           <RecruitForm 
             gender={gender} 
             teams={teamsWithLineStyles.map(t => t.teamName)} 
-            onSubmit={handleAddRecruit} 
+            onSubmit={handleAddRecruit}
+            disabled={!whatIfMode}
           />
           
           <div className="mt-8 pt-6 border-t border-theme-soft">
@@ -547,10 +650,12 @@ export default function OpsModule({ workspace, gender, onUpdate }: Props) {
 
         <ScorerRosterPanel
           results={scoringBundle.allResults}
+          scoredResults={scoringBundle.allScored}
           settings={scoringSettingsObj}
           gender={gender}
           overrides={workspace.scorerRosterOverrides ?? []}
           onChangeOverrides={next => onUpdate({ scorerRosterOverrides: next })}
+          editable={whatIfMode}
         />
 
         <ScoringSettingsPanel

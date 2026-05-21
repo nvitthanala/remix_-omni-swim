@@ -5,9 +5,10 @@
 
 import { Gender, ScorerAutoRules, ScorerRosterOverride, ScoringSettings, SwimmerResult } from '../types';
 import { DEFAULT_SCORER_AUTO_RULES } from './scoringDefaults';
-import { classifyRoundTier, isRelayResult, normalizeSwimmerName } from './utils';
+import { classifyRoundTier, isDivingEvent, isRelayResult, normalizeSwimmerName } from './utils';
 
 export type ScorerRosterRowSource = 'auto' | 'manual';
+export type ScorerRosterAthleteRole = 'diver' | 'swimmer';
 
 export interface ScorerRosterRow {
   key: string;
@@ -15,6 +16,7 @@ export interface ScorerRosterRow {
   team: string;
   gender: Gender;
   classYear: string;
+  athleteRole: ScorerRosterAthleteRole;
   isScorer: boolean;
   source: ScorerRosterRowSource;
 }
@@ -87,25 +89,30 @@ export function buildScorerRosterLookup(
   const autoKeys = deriveAutoScorerKeys(results, rules);
   const manual = overrideMap(overrides);
 
+  const diverPatterns = settings.diverEventPattern;
   const meta = new Map<
     string,
-    { name: string; team: string; gender: Gender; classYear: string }
+    { name: string; team: string; gender: Gender; classYear: string; athleteRole: ScorerRosterAthleteRole }
   >();
 
   for (const r of results) {
     if (r.isRecruit) continue;
-    if (genderFilter != null && r.gender !== genderFilter) continue;
+    if (genderFilter != null && r.gender != null && r.gender !== genderFilter) continue;
     if (isRelayResult(r) && r.name === r.team) continue;
     const team = String(r.team ?? '').trim() || 'Unknown';
     const g = (r.gender ?? genderFilter ?? Gender.MEN) as Gender;
     const key = scorerRosterKey(team, g, r.name);
+    const isDiverRow = !isRelayResult(r) && isDivingEvent(r.event, diverPatterns);
     if (!meta.has(key)) {
       meta.set(key, {
         name: r.name,
         team,
         gender: g,
         classYear: String(r.classYear ?? ''),
+        athleteRole: isDiverRow ? 'diver' : 'swimmer',
       });
+    } else if (isDiverRow) {
+      meta.get(key)!.athleteRole = 'diver';
     }
   }
 
@@ -163,4 +170,23 @@ export function isAbFinalRelayLeg(swim: SwimmerResult, settings: ScoringSettings
   if (!isRelayResult(swim)) return false;
   const rules = effectiveAutoRules(settings);
   return rowSuggestsScorer(swim, rules);
+}
+
+/** Sum projected meet points per athlete (individual swims + relay leg shares). */
+export function aggregateSwimmerMeetPoints(
+  scoredResults: SwimmerResult[],
+  genderFilter?: Gender
+): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const r of scoredResults) {
+    if (r.isRecruit) continue;
+    if (genderFilter != null && r.gender != null && r.gender !== genderFilter) continue;
+    if (isRelayResult(r) && r.name === r.team) continue;
+    const team = String(r.team ?? '').trim() || 'Unknown';
+    const g = (r.gender ?? genderFilter ?? Gender.MEN) as Gender;
+    const key = scorerRosterKey(team, g, r.name);
+    const pts = typeof r.points === 'number' ? r.points : 0;
+    totals.set(key, (totals.get(key) ?? 0) + pts);
+  }
+  return totals;
 }

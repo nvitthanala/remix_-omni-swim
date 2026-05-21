@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ScorerAutoRules, ScoringSettings } from '../types';
+import { ScorerAutoRules, ScoringSettings, SwimmerResult } from '../types';
 import { SCORING_POINTS } from '../constants';
 
 const TOP16 = [...SCORING_POINTS];
@@ -61,13 +61,78 @@ export function presetIdForConference(conference?: string): string | null {
   if (!conference) return null;
   const u = conference.toUpperCase();
   if (u.includes('NSISC')) return 'nsisc';
+  if (u.includes('ACC') || u.includes('SEC') || u.includes('BIG 12') || u.includes('BIG12')) {
+    return 'generic-top16';
+  }
   return null;
 }
 
-export function mergeScoringSettings(settings?: Partial<ScoringSettings>): ScoringSettings {
+/** True when enough rows carry `pdfPoints` (HyTek Points column) to trust PDF-place scoring. */
+export function resultsHavePdfPlacePoints(results: SwimmerResult[] | undefined): boolean {
+  if (!results?.length) return false;
+  const nonRecruit = results.filter(r => !r.isRecruit);
+  if (!nonRecruit.length) return false;
+  const withPdf = nonRecruit.filter(
+    r => r.pdfPoints != null && Number.isFinite(Number(r.pdfPoints))
+  ).length;
+  const threshold = Math.max(8, Math.ceil(nonRecruit.length * 0.01));
+  return withPdf >= threshold;
+}
+
+export function applyPdfPlacePointsNeutralCaps(settings: ScoringSettings): ScoringSettings {
+  return {
+    ...settings,
+    maxIndividualScorersPerTeam: GENERIC_TOP16_SETTINGS.maxIndividualScorersPerTeam,
+    maxRelaysScoringPerTeam: GENERIC_TOP16_SETTINGS.maxRelaysScoringPerTeam,
+    scorerCapScope: GENERIC_TOP16_SETTINGS.scorerCapScope,
+    diverScorerWeight: GENERIC_TOP16_SETTINGS.diverScorerWeight,
+    relayEligibleFromScorerPool: GENERIC_TOP16_SETTINGS.relayEligibleFromScorerPool,
+  };
+}
+
+export function effectivePdfPlacePointsMode(
+  merged: ScoringSettings,
+  resultsHint?: SwimmerResult[]
+): boolean {
+  const flag = merged.usePdfPlacePoints;
+  if (flag === false) return false;
+  if (flag === true) return true;
+  return resultsHavePdfPlacePoints(resultsHint);
+}
+
+/** Saved workspaces may have NSISC caps without roster mode (pre-roster saves or partial UI saves). */
+export function isNsiscShapedSettings(settings: ScoringSettings): boolean {
+  return (
+    settings.maxIndividualScorersPerTeam === NSISC_PRESET_SETTINGS.maxIndividualScorersPerTeam &&
+    settings.maxRelaysScoringPerTeam === NSISC_PRESET_SETTINGS.maxRelaysScoringPerTeam &&
+    settings.scorerCapScope === 'meet' &&
+    Math.abs((settings.diverScorerWeight ?? 1) - (NSISC_PRESET_SETTINGS.diverScorerWeight ?? 1)) < 0.01
+  );
+}
+
+export function mergeScoringSettings(
+  settings?: Partial<ScoringSettings>,
+  options?: { conference?: string; resultsForPdfHint?: SwimmerResult[] }
+): ScoringSettings {
   const merged: ScoringSettings = { ...DEFAULT_SCORING_SETTINGS, ...settings };
-  if (merged.scorerEligibilityMode === 'roster' && !merged.scorerAutoRules) {
-    merged.scorerAutoRules = { ...DEFAULT_SCORER_AUTO_RULES };
+  const pdfLock = effectivePdfPlacePointsMode(merged, options?.resultsForPdfHint);
+
+  if (pdfLock) {
+    merged.scorerEligibilityMode = 'points_pool';
+    merged.scorerAutoRules = undefined;
+    Object.assign(merged, applyPdfPlacePointsNeutralCaps(merged));
+  } else {
+    const nsiscConference = presetIdForConference(options?.conference) === 'nsisc';
+    const shouldUseRoster =
+      merged.scorerEligibilityMode === 'roster' ||
+      (merged.scorerEligibilityMode !== 'points_pool' &&
+        (nsiscConference || isNsiscShapedSettings(merged)));
+    if (shouldUseRoster) {
+      merged.scorerEligibilityMode = 'roster';
+      if (!merged.scorerAutoRules) {
+        merged.scorerAutoRules = { ...DEFAULT_SCORER_AUTO_RULES };
+      }
+    }
   }
   return merged;
 }

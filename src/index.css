@@ -23,6 +23,24 @@
   --border-soft: #363d4c;
   --shadow: rgba(0, 0, 0, 0.28);
   --focus: rgba(248, 113, 113, 0.24);
+  --chart-grid: #374151;
+  --chart-tick: #9ca3af;
+  --popover-bg: #0c0f16;
+  --popover-border: #374151;
+  --hover-overlay: rgba(255, 255, 255, 0.06);
+  --nav-active-bg: #1f2937;
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-info: #22d3ee;
+  --toast-bg: rgba(194, 65, 12, 0.2);
+  --toast-border: rgba(249, 115, 22, 0.35);
+  --toast-text: #fb923c;
+  --btn-action-bg: #f43f5e;
+  --btn-action-hover: #fb7185;
+  --scrollbar-track: var(--surface-muted);
+  --scrollbar-thumb: #4b5563;
+  --scrollbar-thumb-hover: #6b7280;
 }
 
 [data-theme='light'] {
@@ -43,6 +61,24 @@
   --border-soft: #e5e7eb;
   --shadow: rgba(15, 23, 42, 0.08);
   --focus: rgba(185, 28, 28, 0.16);
+  --chart-grid: #e5e7eb;
+  --chart-tick: #6b7280;
+  --popover-bg: #ffffff;
+  --popover-border: #e5e7eb;
+  --hover-overlay: rgba(15, 23, 42, 0.05);
+  --nav-active-bg: #eef1f6;
+  --backdrop: rgba(15, 23, 42, 0.45);
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-info: #0891b2;
+  --toast-bg: rgba(185, 28, 28, 0.08);
+  --toast-border: rgba(185, 28, 28, 0.25);
+  --toast-text: #b91c1c;
+  --btn-action-bg: #dc2626;
+  --btn-action-hover: #b91c1c;
+  --scrollbar-track: var(--surface-muted);
+  --scrollbar-thumb: #c5cad3;
+  --scrollbar-thumb-hover: #9ca3af;
 }
 
 .surface-panel {
@@ -164,13 +200,88 @@ select {
 }
 
 .theme-toggle-button {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-overlay);
   border: 1px solid var(--border);
   transition: all 0.2s ease;
 }
 
 .theme-toggle-button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-strong);
+}
+
+.theme-popover {
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  color: var(--text-primary);
+  box-shadow: 0 10px 40px var(--shadow);
+}
+
+.theme-hover-row:hover {
+  background: var(--hover-overlay);
+}
+
+.nav-tab-active {
+  background: var(--nav-active-bg);
+  color: var(--text-accent);
+}
+
+.nav-tab-inactive {
+  color: var(--text-muted);
+}
+
+.nav-tab-inactive:hover {
+  color: var(--text-primary);
+}
+
+.text-points-positive {
+  color: var(--color-success);
+}
+
+.btn-recruit {
+  background: var(--btn-action-bg);
+  color: #fff;
+}
+
+.btn-recruit:hover:not(:disabled) {
+  background: var(--btn-action-hover);
+}
+
+.btn-recruit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-accent-outline {
+  background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-accent) 35%, transparent);
+  color: var(--text-accent);
+}
+
+.btn-accent-outline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-accent) 22%, transparent);
+}
+
+.modal-backdrop {
+  background: var(--backdrop);
+}
+
+.badge-warning {
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
+  color: var(--color-warning);
+}
+
+.badge-info {
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-info) 35%, transparent);
+  color: var(--color-info);
+}
+
+.toast-undo {
+  background: var(--toast-bg);
+  border: 1px solid var(--toast-border);
+  color: var(--toast-text);
+  box-shadow: 0 10px 30px var(--shadow);
 }
 
 .neon-card {
@@ -183,7 +294,7 @@ select {
 
 .neon-card:hover {
   transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-overlay);
 }
 
 .glass-input {
@@ -200,6 +311,11 @@ select {
 .glass-input:focus {
   border-color: var(--text-accent);
   box-shadow: 0 0 0 4px var(--focus);
+}
+
+.glass-input option {
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .btn-primary {
@@ -242,19 +358,24 @@ select {
   font-family: inherit;
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar — theme tokens follow [data-theme] on <html> */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--scrollbar-track);
+  border-radius: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--border-soft);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-soft);
+  background: var(--scrollbar-thumb-hover);
 }
 

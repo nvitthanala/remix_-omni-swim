@@ -22,11 +22,26 @@
   "maxIndividualScorersPerTeam": 18,
   "maxRelaysScoringPerTeam": 2,
   "aFinalBracketSize": 8,
-  "scorerCapScope": "meet",
-  "diverScorerWeight": 0.3333333333333333,
-  "relayEligibleFromScorerPool": true,
+  "scorerCapScope": "event",
+  "diverScorerWeight": 1,
+  "relayEligibleFromScorerPool": false,
   "diverEventPattern": [
     "DIVING",
     "DIVE"
-  ]
+  ],
+  "scorerEligibilityMode": "roster",
+  "scorerAutoRules": {
+    "abFinalTiers": [
+      "A",
+      "B"
+    ],
+    "includeRelayLegsInFinals": true,
+    "distanceFinalRequired": true,
+    "distanceEventPattern": [
+      "1000",
+      "1650",
+      "1500"
+    ]
+  },
+  "scorerRosterOverrides": []
 }

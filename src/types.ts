@@ -49,6 +49,8 @@ export interface SwimmerResult {
   relayLegSplit?: string;
   relayTeamTime?: string;
   relayMissingLeg?: RelayMissingLeg;
+  /** HyTek place points from PDF Points column; overrides calculated scoring when set. */
+  pdfPoints?: number;
 }
 
 /** Swimmers removed from the workspace; excluded from individuals and treated as departed relay legs. */
@@ -74,12 +76,13 @@ export interface ScoringSettings {
   relayMultiplier: number;
   halfRateRelaySwimmer: boolean;
   maxIndividualScorersPerTeam: number;
+  /** Max scoring relay entries per team within each relay event (not meet-wide). */
   maxRelaysScoringPerTeam: number;
   /** Places in the first final (e.g. 8) for A+B 16-deep tables; default half of scoringPoints length. */
   aFinalBracketSize?: number;
   /** Round/event substrings that earn no team points (case-insensitive). */
   unscoredRounds?: string[];
-  /** When `'meet'`, individual scorer cap and relay cap apply across the full meet (chronological). */
+  /** When `'meet'`, individual scorer cap applies across the full meet (chronological). Relay cap is always per relay event. */
   scorerCapScope?: 'meet' | 'event';
   /** Weight toward maxIndividualScorersPerTeam for diving events (e.g. 1/3 for NSISC). */
   diverScorerWeight?: number;
@@ -92,6 +95,11 @@ export interface ScoringSettings {
    * `roster` — explicit roster table (auto rules + manual overrides); relays use roster only.
    */
   scorerEligibilityMode?: 'points_pool' | 'roster';
+  /**
+   * Use HyTek PDF Points column per row when present (short-circuit engine).
+   * `auto` / omit: enable when enough rows have `pdfPoints` (uploads from meets with Points column).
+   */
+  usePdfPlacePoints?: boolean | 'auto';
   /** Auto-mark scorers from meet swims when using roster mode (conference presets set these). */
   scorerAutoRules?: ScorerAutoRules;
 }

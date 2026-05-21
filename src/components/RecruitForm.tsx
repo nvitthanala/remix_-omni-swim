@@ -12,6 +12,7 @@ interface Props {
   gender: Gender;
   teams: string[];
   onSubmit: (recruit: Recruit) => void;
+  disabled?: boolean;
 }
 
 const EVENTS = [
@@ -23,7 +24,7 @@ const EVENTS = [
   '50 Butterfly (Relay split)', '100 Butterfly (Relay split)',
 ];
 
-export default function RecruitForm({ gender, teams, onSubmit }: Props) {
+export default function RecruitForm({ gender, teams, onSubmit, disabled = false }: Props) {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -36,6 +37,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (disabled) return;
     if (!formData.firstName || !formData.lastName || !formData.time) return;
 
     const recruit: Recruit = {
@@ -54,7 +56,7 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className={`space-y-4 ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
       <div>
         <label className="block text-[10px] uppercase text-theme-muted font-bold mb-1.5">Athlete Name</label>
         <div className="grid grid-cols-2 gap-2">
@@ -139,7 +141,11 @@ export default function RecruitForm({ gender, teams, onSubmit }: Props) {
         />
       </div>
 
-      <button type="submit" className="w-full py-3 mt-2 bg-rose-500 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded hover:bg-rose-400 transition-all flex items-center justify-center gap-2">
+      <button
+        type="submit"
+        disabled={disabled}
+        className="w-full py-3 mt-2 btn-recruit font-black text-[10px] uppercase tracking-[0.2em] rounded transition-all flex items-center justify-center gap-2"
+      >
         <Play size={12} fill="currentColor" />
         <span>Inject Recruit Into Matrix</span>
       </button>

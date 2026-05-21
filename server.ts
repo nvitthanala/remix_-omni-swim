@@ -380,28 +380,39 @@ async function startServer() {
       }
 
       // Map to frontend structure
-      const results: SwimmerResult[] = athletes.map((a: any) => ({
-        id: uuidv4(),
-        rank: a.rank ? parseInt(a.rank) || 0 : 0,
-        name: a.name,
-        classYear: a.year || 'UNKNOWN',
-        team: a.team,
-        time: a.finals_time || a.prelims_time || 'NT',
-        prelimsTime: a.prelims_time,
-        finalsTime: a.finals_time,
-        roundSwam: a.round_swam,
-        points: a.calculated_points === 'N/A' ? 'N/A' : (a.calculated_points || 0),
-        event: a.event,
-        gender: a.gender === 'Women' ? Gender.WOMEN : Gender.MEN,
-        isRelay: Boolean(a.is_relay) || /\brelay\b/i.test(String(a.event || '')),
-        isExhibition: a.is_exhibition,
-        isTimeTrial: a.is_time_trial,
-        relayNames: a.relay_names || [],
-        relayLegIndex: a.relay_leg_index,
-        relayLegStroke: a.relay_leg_stroke,
-        relayLegSplit: a.relay_leg_split,
-        relayTeamTime: a.relay_team_time,
-      }));
+      const results: SwimmerResult[] = athletes.map((a: any) => {
+        const rankMatch = a.rank != null && a.rank !== '' ? String(a.rank).match(/(\d+)/) : null;
+        const parsedRank = rankMatch ? parseInt(rankMatch[1], 10) : 0;
+        const teamClock = a.relay_team_time || a.finals_time || a.prelims_time;
+        const isRelay =
+          Boolean(a.is_relay) || /\brelay\b/i.test(String(a.event || ''));
+        return {
+          id: uuidv4(),
+          rank: parsedRank > 0 ? parsedRank : 0,
+          name: a.name,
+          classYear: a.year || 'UNKNOWN',
+          team: a.team,
+          time: teamClock || 'NT',
+          prelimsTime: a.prelims_time,
+          finalsTime: a.finals_time,
+          roundSwam: a.round_swam,
+          points: a.calculated_points === 'N/A' ? 'N/A' : (a.calculated_points || 0),
+          event: a.event,
+          gender: a.gender === 'Women' ? Gender.WOMEN : Gender.MEN,
+          isRelay,
+          isExhibition: a.is_exhibition,
+          isTimeTrial: a.is_time_trial,
+          relayNames: a.relay_names || [],
+          relayLegIndex: a.relay_leg_index,
+          relayLegStroke: a.relay_leg_stroke,
+          relayLegSplit: a.relay_leg_split,
+          relayTeamTime: isRelay ? teamClock : a.relay_team_time,
+          pdfPoints:
+            a.pdf_points != null && a.pdf_points !== ''
+              ? Number(a.pdf_points)
+              : undefined,
+        };
+      });
 
       const conference =
         athletes.length > 0 && typeof athletes[0].conference === 'string'

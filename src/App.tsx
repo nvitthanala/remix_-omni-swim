@@ -190,12 +190,12 @@ export default function App() {
             initial={{ opacity: 0, y: 50, x: '-50%' }}
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: 50, x: '-50%' }}
-            className="fixed bottom-12 left-1/2 z-50 bg-[#c2410c]/20 border border-orange-500/30 text-orange-400 px-6 py-3 rounded-full shadow-lg shadow-black/50 flex items-center gap-4"
+            className="fixed bottom-12 left-1/2 z-50 toast-undo px-6 py-3 rounded-full flex items-center gap-4"
           >
             <span className="text-xs uppercase tracking-widest font-bold">Workspace Deleted</span>
             <button 
               onClick={undoDeleteWorkspace}
-              className="bg-orange-500 text-gray-900 px-3 py-1 rounded text-xs font-bold uppercase hover:bg-orange-400 transition-colors"
+              className="bg-[var(--text-accent)] text-white px-3 py-1 rounded text-xs font-bold uppercase hover:opacity-90 transition-colors"
             >
               Undo
             </button>
@@ -206,7 +206,7 @@ export default function App() {
       {/* Header */}
       <header className="app-header h-16 flex items-center justify-between px-6 z-20">
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 flex items-center justify-center bg-[var(--surface-muted)] rounded shadow shadow-black/20 border border-[var(--border)] overflow-hidden">
+          <div className="w-10 h-10 flex items-center justify-center bg-[var(--surface-muted)] rounded shadow border border-[var(--border)] overflow-hidden" style={{ boxShadow: '0 4px 12px var(--shadow)' }}>
             <img src="/OMNISWIMLOGO.png" alt="Omni Swim Logo" className="w-full h-full object-contain p-1" />
           </div>
           <h1 className="text-xl font-black tracking-tighter text-[var(--text-primary)]">OMNI SWIM <span className="text-[var(--text-accent)] font-semibold">MATRIX</span></h1>
@@ -217,9 +217,7 @@ export default function App() {
             <button 
               onClick={() => setActiveGender(Gender.MEN)}
               className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
-                activeGender === Gender.MEN 
-                  ? 'bg-[#1f2937] text-rose-400' 
-                  : 'text-gray-500 hover:text-gray-300'
+                activeGender === Gender.MEN ? 'nav-tab-active' : 'nav-tab-inactive'
               }`}
             >
               Men's Operations
@@ -227,9 +225,7 @@ export default function App() {
             <button 
               onClick={() => setActiveGender(Gender.WOMEN)}
               className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all ${
-                activeGender === Gender.WOMEN 
-                  ? 'bg-[#1f2937] text-rose-400' 
-                  : 'text-gray-500 hover:text-gray-300'
+                activeGender === Gender.WOMEN ? 'nav-tab-active' : 'nav-tab-inactive'
               }`}
             >
               Women's Operations
@@ -248,7 +244,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button 
                 onClick={() => setShowSettingsParamsManager(true)}
-                className="p-1.5 hover:bg-white/10 rounded text-[var(--text-accent)] border border-[var(--text-accent)]/20 bg-[var(--text-accent)]/10 transition-colors"
+                className="p-1.5 theme-hover-row rounded btn-accent-outline transition-colors"
                 title="Configure Scoring Model"
               >
                 <Settings size={14} />
@@ -267,10 +263,10 @@ export default function App() {
         <aside className="workspace-sidebar w-64 flex flex-col">
           <div className="p-4 flex flex-col gap-2">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-[10px] uppercase tracking-widest text-gray-500 font-bold">Active Sessions</h2>
+              <h2 className="text-[10px] uppercase tracking-widest text-theme-muted font-bold">Active Sessions</h2>
               <button 
                 onClick={createWorkspace}
-                className="p-1 hover:bg-white/5 rounded text-gray-400 hover:text-white transition-colors"
+                className="p-1 theme-hover-row rounded text-theme-secondary hover:text-[var(--text-primary)] transition-colors"
               >
                 <Plus size={14} />
               </button>
@@ -281,8 +277,8 @@ export default function App() {
                   onClick={() => setActiveWorkspaceId(w.id)}
                   className={`flex flex-col p-3 rounded-r-md border-l-4 transition-all w-full text-left ${
                     activeWorkspaceId === w.id 
-                      ? 'surface-card border-rose-400' 
-                      : 'surface-soft border-theme-soft hover:bg-white/5'
+                      ? 'surface-card border-[var(--text-accent)]' 
+                      : 'surface-soft border-theme-soft theme-hover-row'
                   }`}
                 >
                   <div className="flex justify-between items-start w-full pr-6">
@@ -307,13 +303,13 @@ export default function App() {
                     )}
                     <FileText size={12} className={activeWorkspaceId === w.id ? 'text-[var(--text-accent)] shrink-0' : 'text-theme-secondary shrink-0'} />
                   </div>
-                  <div className="text-[9px] text-gray-500 mt-1 uppercase font-mono">
+                  <div className="text-[9px] text-theme-muted mt-1 uppercase font-mono">
                     {new Date(w.createdAt).toLocaleDateString()}
                   </div>
                 </button>
                 <button 
                   onClick={(e) => initDeleteWorkspace(w.id, e)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-[var(--text-accent)]/15 text-theme-muted hover:text-[var(--text-accent)] rounded transition-all"
                 >
                   <Trash2 size={12} />
                 </button>
@@ -370,13 +366,19 @@ export default function App() {
           <span>DB: MEETS.JSON</span>
         </div>
         <div className="flex gap-4">
-          <span className="text-rose-900 uppercase font-bold tracking-tighter">© 2026 NIHAR VITTHANALA, NOW OMNI SWIM ANALYTICS GROUP</span>
+          <span className="text-theme-muted uppercase font-bold tracking-tighter">© 2026 NIHAR VITTHANALA, NOW OMNI SWIM ANALYTICS GROUP</span>
         </div>
       </footer>
 
       {showSettingsParamsManager && activeWorkspace && (
         <ScoringSettingsModal 
-          settings={mergeScoringSettings(activeWorkspace.scoringSettings)}
+          settings={mergeScoringSettings(activeWorkspace.scoringSettings, {
+            conference: activeWorkspace.conference,
+            resultsForPdfHint: [
+              ...(activeWorkspace.menResults ?? []),
+              ...(activeWorkspace.womenResults ?? []),
+            ],
+          })}
           onSave={(settings) => {
             updateWorkspace({ scoringSettings: settings });
             setShowSettingsParamsManager(false);

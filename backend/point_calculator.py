@@ -2,6 +2,8 @@ import sys
 
 import json
 
+import math
+
 import re
 
 from collections import defaultdict
@@ -11,7 +13,115 @@ from collections import defaultdict
 DEFAULT_NCAA_D2_SCORING = [20, 17, 16, 15, 14, 13, 12, 11, 9, 7, 6, 5, 4, 3, 2, 1]
 
 
+def _is_nsisc_shaped_settings(cfg):
+    try:
+        return (
+            int(cfg.get('maxIndividualScorersPerTeam', 999)) == 18
+            and int(cfg.get('maxRelaysScoringPerTeam', 999)) == 2
+            and cfg.get('scorerCapScope') == 'meet'
+            and abs(float(cfg.get('diverScorerWeight', 1)) - (1.0 / 3.0)) < 0.01
+        )
+    except (TypeError, ValueError):
+        return False
 
+
+def _merge_roster_mode(cfg):
+    if cfg.get('usePdfPlacePoints') is True:
+        return cfg
+    mode = cfg.get('scorerEligibilityMode')
+    if mode != 'points_pool' and (mode == 'roster' or _is_nsisc_shaped_settings(cfg)):
+        cfg['scorerEligibilityMode'] = 'roster'
+        if not cfg.get('scorerAutoRules'):
+            cfg['scorerAutoRules'] = {
+                'abFinalTiers': ['A', 'B'],
+                'includeRelayLegsInFinals': True,
+                'distanceFinalRequired': True,
+                'distanceEventPattern': ['1000', '1650', '1500'],
+            }
+    return cfg
+
+
+def _results_have_pdf_place_points(athletes):
+    non_recruit = [a for a in athletes if not a.get('is_recruit')]
+    if not non_recruit:
+        return False
+
+    def _has_pdf(a):
+        pp = a.get('pdf_points')
+        if pp is None or pp == '':
+            return False
+        try:
+            val = float(pp)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(val)
+
+    with_pdf = sum(1 for a in non_recruit if _has_pdf(a))
+    threshold = max(8, math.ceil(len(non_recruit) * 0.01))
+    return with_pdf >= threshold
+
+
+def _effective_pdf_place_points_mode(cfg, athletes):
+    flag = cfg.get('usePdfPlacePoints')
+    if flag is False:
+        return False
+    if flag is True:
+        return True
+    if isinstance(flag, str) and flag.lower() == 'false':
+        return False
+    if isinstance(flag, str) and flag.lower() == 'true':
+        return True
+    return _results_have_pdf_place_points(athletes)
+
+
+def _apply_pdf_place_neutral_caps(cfg):
+    cfg['maxIndividualScorersPerTeam'] = 999
+    cfg['maxRelaysScoringPerTeam'] = 999
+    cfg['scorerCapScope'] = 'event'
+    cfg['diverScorerWeight'] = 1
+    cfg['relayEligibleFromScorerPool'] = False
+
+
+def _apply_pdf_place_scoring_lock(cfg):
+    cfg['scorerEligibilityMode'] = 'points_pool'
+    if 'scorerAutoRules' in cfg:
+        del cfg['scorerAutoRules']
+    _apply_pdf_place_neutral_caps(cfg)
+
+
+def _pdf_place_points_for_row(a):
+    if a.get('is_exhibition'):
+        return 0.0
+    ev_nm = str(a.get('event', '') or '')
+    if a.get('is_time_trial') and not is_championship_gender_event(ev_nm):
+        return 0.0
+    pp = a.get('pdf_points')
+    if pp is None or pp == '':
+        return 0.0
+    try:
+        val = float(pp)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(val) or val < 0:
+        return 0.0
+    return val
+
+
+def _relay_team_clock(a):
+    return str(a.get('relay_team_time') or a.get('finals_time') or a.get('prelims_time') or '').strip()
+
+
+def _relay_entry_group_key(a):
+    """One team relay entry (all four legs); not per-leg."""
+    rk = parse_rank_int(a)
+    rk_s = str(rk) if rk is not None else ''
+    return '|'.join([
+        str(a.get('event') or '').strip(),
+        str(a.get('team') or '').strip(),
+        str(a.get('round_swam') or '').strip(),
+        rk_s,
+        _relay_team_clock(a),
+    ])
 
 
 def _resolve_scoring_settings(scoring_settings=None):
@@ -102,7 +212,8 @@ def _resolve_scoring_settings(scoring_settings=None):
 
     cfg.setdefault('relayEligibleFromScorerPool', False)
 
-    cfg['maxRelaysScoringPerTeam'] = min(int(cfg.get('maxRelaysScoringPerTeam', 2)), 2)
+    if _is_nsisc_shaped_settings(cfg):
+        cfg['maxRelaysScoringPerTeam'] = min(int(cfg.get('maxRelaysScoringPerTeam', 2)), 2)
 
     cfg.setdefault('maxRosterSize', 99)
 
@@ -116,7 +227,7 @@ def _resolve_scoring_settings(scoring_settings=None):
 
     cfg.setdefault('aFinalBracketSize', max(1, npts // 2))
 
-    return cfg
+    return _merge_roster_mode(cfg)
 
 
 
@@ -150,9 +261,11 @@ def classify_round_tier(round_swam):
 
         return 'A'
 
-    if 'FINALS' in r:
+    if re.match(r'^FINALS?$', r.strip()) or (
+        re.search(r'\bFINALS?\b', r) and not re.search(r'[ABCD]\s*FINAL', r)
+    ):
 
-        return 'A'
+        return 'FIN'
 
     return 'UNK'
 
@@ -165,6 +278,36 @@ def is_distance_event(event_name):
     u = (event_name or '').upper()
 
     return bool(re.search(r'\b(1000|1650|1500|800|10000)\b', u)) or 'TIMED' in u
+
+
+
+
+
+def is_timed_final_distance_heat(round_swam, event_name):
+
+    if not is_distance_event(event_name):
+
+        return False
+
+    return classify_round_tier(round_swam) == 'FIN'
+
+
+
+
+
+def is_timed_final_distance_session(ev_athletes):
+
+    return bool(ev_athletes) and all(
+        is_timed_final_distance_heat(a.get('round_swam'), a.get('event')) for a in ev_athletes
+    )
+
+
+
+
+
+def is_championship_gender_event(event_name):
+
+    return bool(re.search(r'\b(Boys?|Girls?)\b', event_name or '', re.IGNORECASE))
 
 
 
@@ -214,14 +357,43 @@ def is_unscored_round_or_event(round_swam, event_name, cfg):
 
             return True
 
-    if 'TIME TRIAL' in e:
+    if 'TIME TRIAL' in e and not is_championship_gender_event(event_name):
 
         return True
 
     return False
 
 
+_NON_SCORING_TIME_RE = re.compile(
+    r'^(?:DQ|DFS|SCR|NS|NP|NC|NT|N/A|---)(?:\b|$)',
+    re.IGNORECASE,
+)
 
+
+def _is_finals_round(round_swam):
+    tier = classify_round_tier(round_swam)
+    return tier in ('A', 'B', 'FIN')
+
+
+def _swim_result_clock(a):
+    if classify_round_tier(a.get('round_swam')) == 'PRE':
+        return str(a.get('prelims_time') or a.get('time') or '').strip()
+    return str(
+        a.get('relay_team_time') or a.get('finals_time') or a.get('time') or ''
+    ).strip()
+
+
+def is_scoring_swim_time(clock):
+    u = str(clock or '').strip()
+    if not u:
+        return False
+    return _NON_SCORING_TIME_RE.match(u) is None
+
+
+def is_scoring_athlete(a):
+    if not _is_finals_round(a.get('round_swam')):
+        return True
+    return is_scoring_swim_time(_swim_result_clock(a))
 
 
 def can_score_swim(round_swam, event_name, cfg):
@@ -238,9 +410,151 @@ def can_score_swim(round_swam, event_name, cfg):
 
     if tier == 'PRE':
 
-        return is_distance_event(event_name)
+        return is_distance_event(event_name) or is_diving_event(event_name, cfg)
 
     return True
+
+
+
+
+
+def _score_timed_final_individuals(
+    ev_athletes,
+    cfg,
+    meet_states,
+    gender,
+    use_meet_wide_pool,
+    roster_is_scorer,
+    max_individuals_cfg,
+):
+    """Timed-finals distance: scoring-place ladder skips non-point-earning finishers."""
+    SCORING = cfg['scoringPoints']
+    out = []
+    by_rank = defaultdict(list)
+    for a in ev_athletes:
+        rk = parse_rank_int(a)
+        key = str(rk) if rk is not None and rk > 0 else f"T|{id(a)}"
+        by_rank[key].append(a)
+
+    def rank_sort_key(item):
+        a = item[1][0]
+        return parse_rank_int(a) or 9999
+
+    sorted_groups = sorted(by_rank.items(), key=rank_sort_key)
+    team_indiv_counts = defaultdict(int)
+    scoring_place = 0
+
+    for _key, group in sorted_groups:
+        ineligible = [a for a in group if not is_scoring_athlete(a)]
+        for athlete in ineligible:
+            athlete['calculated_points'] = 0.0
+        out.extend(ineligible)
+
+        eligible = [a for a in group if is_scoring_athlete(a)]
+        if not eligible:
+            continue
+
+        sample = eligible[0]
+        ev_nm = str(sample.get('event', '') or '')
+        point_eligible = []
+
+        for athlete in eligible:
+            if athlete.get('is_exhibition', False):
+                athlete['calculated_points'] = 0.0
+                out.append(athlete)
+                continue
+            if athlete.get('is_time_trial', False) and not is_championship_gender_event(ev_nm):
+                athlete['calculated_points'] = 0.0
+                out.append(athlete)
+                continue
+            rs = str(athlete.get('round_swam', '') or '')
+            if not can_score_swim(rs, ev_nm, cfg):
+                athlete['calculated_points'] = 0.0
+                out.append(athlete)
+                continue
+            point_eligible.append(athlete)
+
+        if not point_eligible:
+            continue
+
+        avail = len(SCORING) - scoring_place
+        take = min(len(point_eligible), avail)
+        slice_pts = SCORING[scoring_place : scoring_place + take]
+        if not slice_pts:
+            for athlete in point_eligible:
+                athlete['calculated_points'] = 0.0
+                out.append(athlete)
+            continue
+
+        avg_pts = sum(slice_pts) / len(point_eligible)
+        by_team = defaultdict(list)
+        for athlete in point_eligible:
+            by_team[athlete.get('team')].append(athlete)
+
+        any_awarded = False
+        for team_name, members in by_team.items():
+            mkey = _meet_state_key(team_name, gender)
+            unique_names = list({a.get('name') for a in members})
+
+            if use_meet_wide_pool:
+                if mkey not in meet_states:
+                    meet_states[mkey] = {'pool': {}, 'relays': 0}
+                pool = meet_states[mkey]['pool']
+                can_all = all(_can_add_to_pool(pool, n, ev_nm, cfg) for n in unique_names)
+                for athlete in members:
+                    award = avg_pts if can_all else 0.0
+                    athlete['calculated_points'] = award
+                    out.append(athlete)
+                    if award > 0:
+                        any_awarded = True
+                if can_all:
+                    for n in unique_names:
+                        _add_to_pool(pool, n, ev_nm, cfg)
+            elif max_individuals_cfg < 999 and team_indiv_counts[team_name] >= max_individuals_cfg:
+                for athlete in members:
+                    athlete['calculated_points'] = 0.0
+                    out.append(athlete)
+            else:
+                for athlete in members:
+                    athlete['calculated_points'] = avg_pts
+                    out.append(athlete)
+                any_awarded = True
+                if max_individuals_cfg < 999:
+                    team_indiv_counts[team_name] += len(unique_names)
+
+        if any_awarded:
+            scoring_place += take
+
+    return out
+
+
+def _athlete_has_finals_dive_in_event(event_rows, name, team, cfg):
+
+    n = (name or '').strip()
+
+    t = (team or '').strip()
+
+    for r in event_rows:
+
+        if (r.get('name') or '').strip() != n:
+
+            continue
+
+        if (str(r.get('team') or '').strip()) != t:
+
+            continue
+
+        if not is_diving_event(r.get('event'), cfg):
+
+            continue
+
+        tier = classify_round_tier(r.get('round_swam'))
+
+        if tier in ('A', 'B'):
+
+            return True
+
+    return False
 
 
 
@@ -332,7 +646,7 @@ def round_tier_sort_order(round_swam):
 
     tier = classify_round_tier(round_swam)
 
-    return {'A': 1, 'UNK': 1, 'B': 2, 'PRE': 3, 'C': 8, 'D': 8, 'TT': 9}.get(tier, 5)
+    return {'A': 1, 'FIN': 1, 'UNK': 1, 'B': 2, 'PRE': 3, 'C': 8, 'D': 8, 'TT': 9}.get(tier, 5)
 
 
 
@@ -684,24 +998,6 @@ def calculate_points(athletes, scoring_settings=None):
 
     cfg = _resolve_scoring_settings(scoring_settings)
 
-    SCORING = cfg['scoringPoints']
-
-    relay_multiplier = cfg['relayMultiplier']
-
-    half_rate_relay = cfg['halfRateRelaySwimmer']
-
-    max_relays_cfg = cfg['maxRelaysScoringPerTeam']
-
-    max_individuals_cfg = cfg['maxIndividualScorersPerTeam']
-
-    use_meet_caps = cfg.get('scorerCapScope') == 'meet' or max_individuals_cfg < 999
-
-    roster_is_scorer = _build_roster_is_scorer(athletes, cfg) if _uses_roster(cfg) else None
-
-    relay_pool_rule = cfg.get('relayEligibleFromScorerPool', False) and not _uses_roster(cfg)
-
-
-
     for ath in athletes:
 
         ev_name = str(ath.get('event', '')).upper()
@@ -732,7 +1028,34 @@ def calculate_points(athletes, scoring_settings=None):
 
             ath['is_time_trial'] = True
 
+    if _effective_pdf_place_points_mode(cfg, athletes):
+        _apply_pdf_place_scoring_lock(cfg)
+        for ath in athletes:
+            ath['calculated_points'] = _pdf_place_points_for_row(ath)
+        return athletes
 
+    SCORING = cfg['scoringPoints']
+
+    relay_multiplier = cfg['relayMultiplier']
+
+    half_rate_relay = cfg['halfRateRelaySwimmer']
+
+    max_relays_cfg = cfg['maxRelaysScoringPerTeam']
+
+    max_individuals_cfg = cfg['maxIndividualScorersPerTeam']
+
+    use_meet_wide_pool = cfg.get('scorerCapScope') == 'meet' and max_individuals_cfg < 999
+
+    roster_is_scorer = _build_roster_is_scorer(athletes, cfg) if _uses_roster(cfg) else None
+
+    relay_pool_rule = cfg.get('relayEligibleFromScorerPool', False) and not _uses_roster(cfg)
+
+    process_events_chronologically = (
+        use_meet_wide_pool
+        or relay_pool_rule
+        or max_relays_cfg < 999
+        or max_individuals_cfg < 999
+    )
 
     events = defaultdict(list)
 
@@ -779,19 +1102,7 @@ def calculate_points(athletes, scoring_settings=None):
 
             for a in ev_athletes:
 
-                t_key = (
-
-                    a.get('team'),
-
-                    a.get('round_swam') or '',
-
-                    a.get('rank'),
-
-                    a.get('finals_time') or a.get('prelims_time'),
-
-                )
-
-                teams[t_key].append(a)
+                teams[_relay_entry_group_key(a)].append(a)
 
 
 
@@ -825,9 +1136,11 @@ def calculate_points(athletes, scoring_settings=None):
 
                     not is_exhibition
 
-                    and not is_time_trial
+                    and not (is_time_trial and not is_championship_gender_event(ev_nm))
 
                     and can_score_swim(rs, ev_nm, cfg)
+
+                    and is_scoring_athlete(team_athlete)
 
                 )
 
@@ -849,19 +1162,8 @@ def calculate_points(athletes, scoring_settings=None):
 
                 mkey = _meet_state_key(team_name, gender)
 
-                if use_meet_caps:
-
-                    if mkey not in meet_states:
-
-                        meet_states[mkey] = {'pool': {}, 'relays': 0}
-
-                    mstate = meet_states[mkey]
-
-                    relay_count = mstate['relays']
-
-                else:
-
-                    relay_count = team_relay_counts[team_name]
+                # Relay cap is per team per relay event (_process_scoring_event is one event).
+                relay_count = team_relay_counts[team_name]
 
 
 
@@ -889,7 +1191,7 @@ def calculate_points(athletes, scoring_settings=None):
 
                         continue
 
-                elif use_meet_caps and relay_pool_rule:
+                elif use_meet_wide_pool and relay_pool_rule:
 
                     pool = meet_states[mkey]['pool']
 
@@ -921,13 +1223,7 @@ def calculate_points(athletes, scoring_settings=None):
 
 
 
-                if use_meet_caps:
-
-                    meet_states[mkey]['relays'] += 1
-
-                else:
-
-                    team_relay_counts[team_name] += 1
+                team_relay_counts[team_name] += 1
 
 
 
@@ -941,119 +1237,183 @@ def calculate_points(athletes, scoring_settings=None):
 
         else:
 
-            ind_by_key = defaultdict(list)
+            if is_timed_final_distance_session(ev_athletes):
 
-            for a in ev_athletes:
+                scored_athletes.extend(
+                    _score_timed_final_individuals(
+                        ev_athletes,
+                        cfg,
+                        meet_states,
+                        gender,
+                        use_meet_wide_pool,
+                        roster_is_scorer,
+                        max_individuals_cfg,
+                    )
+                )
 
-                rk = parse_rank_int(a)
+            else:
 
-                if rk is None or rk < 1:
+                ind_by_key = defaultdict(list)
 
-                    key = (a.get('round_swam') or '', -1, id(a))
+                for a in ev_athletes:
 
-                else:
+                    rk = parse_rank_int(a)
 
-                    key = (a.get('round_swam') or '', rk)
+                    if rk is None or rk < 1:
 
-                ind_by_key[key].append(a)
+                        key = (a.get('round_swam') or '', -1, id(a))
 
+                    else:
 
+                        key = (a.get('round_swam') or '', rk)
 
-            sorted_groups = sorted(ind_by_key.values(), key=lambda grp: get_ev_sort_key(grp[0]))
-
-            team_indiv_counts = defaultdict(int)
-
-
-
-            for group in sorted_groups:
-
-                team_athlete = group[0]
-
-                is_exhibition = team_athlete.get('is_exhibition', False)
-
-                is_time_trial = team_athlete.get('is_time_trial', False)
-
-                ev_nm = str(team_athlete.get('event', '') or '')
-
-                rs = str(team_athlete.get('round_swam', '') or '')
-
-                rk = parse_rank_int(team_athlete)
-
-                grp_len = len(group)
+                    ind_by_key[key].append(a)
 
 
 
-                if is_exhibition or is_time_trial or not can_score_swim(rs, ev_nm, cfg):
+                sorted_groups = sorted(ind_by_key.values(), key=lambda grp: get_ev_sort_key(grp[0]))
 
-                    for athlete in group:
-
-                        athlete['calculated_points'] = 0.0
-
-                    scored_athletes.extend(group)
-
-                    continue
+                team_indiv_counts = defaultdict(int)
 
 
 
-                base_idx = scoring_row_index(rs, rk, ev_nm, cfg)
+                for group in sorted_groups:
 
-                if base_idx is None:
+                    ineligible = [a for a in group if not is_scoring_athlete(a)]
 
-                    for athlete in group:
+                    eligible = [a for a in group if is_scoring_athlete(a)]
+
+                    for athlete in ineligible:
 
                         athlete['calculated_points'] = 0.0
 
-                    scored_athletes.extend(group)
+                    scored_athletes.extend(ineligible)
 
-                    continue
+                    if not eligible:
 
+                        continue
 
+                    team_athlete = eligible[0]
 
-                avail = len(SCORING) - base_idx
+                    is_exhibition = team_athlete.get('is_exhibition', False)
 
-                take = min(grp_len, avail)
+                    is_time_trial = team_athlete.get('is_time_trial', False)
 
-                slice_pts = SCORING[base_idx : base_idx + take]
+                    ev_nm = str(team_athlete.get('event', '') or '')
 
-                if not slice_pts:
+                    rs = str(team_athlete.get('round_swam', '') or '')
 
-                    for athlete in group:
+                    rk = parse_rank_int(team_athlete)
 
-                        athlete['calculated_points'] = 0.0
+                    grp_len = len(eligible)
 
-                    scored_athletes.extend(group)
-
-                    continue
-
-
-
-                avg_pts = sum(slice_pts) / grp_len
+                    is_prelim_diving = (
+                        classify_round_tier(rs) == 'PRE' and is_diving_event(ev_nm, cfg)
+                    )
 
 
 
-                by_team = defaultdict(list)
+                    if (
+                        is_exhibition
+                        or (is_time_trial and not is_championship_gender_event(ev_nm))
+                        or not can_score_swim(rs, ev_nm, cfg)
+                    ):
 
-                for athlete in group:
+                        for athlete in eligible:
 
-                    by_team[athlete.get('team')].append(athlete)
+                            athlete['calculated_points'] = 0.0
+
+                        scored_athletes.extend(eligible)
+
+                        continue
 
 
 
-                for team_name, members in by_team.items():
+                    base_idx = scoring_row_index(rs, rk, ev_nm, cfg)
 
-                    mkey = _meet_state_key(team_name, gender)
+                    if base_idx is None:
 
-                    unique_names = list({a.get('name') for a in members})
+                        for athlete in eligible:
 
-                    if roster_is_scorer is not None:
+                            athlete['calculated_points'] = 0.0
 
-                        roster_ok = all(roster_is_scorer(n, team_name, gender) for n in unique_names)
+                        scored_athletes.extend(eligible)
 
-                        for athlete in members:
+                        continue
 
-                            athlete['calculated_points'] = avg_pts if roster_ok else 0.0
 
-                        if roster_ok and use_meet_caps:
+
+                    avail = len(SCORING) - base_idx
+
+                    take = min(grp_len, avail)
+
+                    slice_pts = SCORING[base_idx : base_idx + take]
+
+                    if not slice_pts:
+
+                        for athlete in eligible:
+
+                            athlete['calculated_points'] = 0.0
+
+                        scored_athletes.extend(eligible)
+
+                        continue
+
+
+
+                    avg_pts = sum(slice_pts) / grp_len
+
+
+
+                    by_team = defaultdict(list)
+
+                    for athlete in eligible:
+
+                        by_team[athlete.get('team')].append(athlete)
+
+
+
+                    for team_name, members in by_team.items():
+
+                        mkey = _meet_state_key(team_name, gender)
+
+                        unique_names = list({a.get('name') for a in members})
+
+                        def _prelim_dive_blocked(athlete):
+
+                            return is_prelim_diving and _athlete_has_finals_dive_in_event(
+                                ev_athletes, athlete.get('name'), team_name, cfg
+                            )
+
+                        if roster_is_scorer is not None:
+
+                            roster_ok = all(roster_is_scorer(n, team_name, gender) for n in unique_names)
+
+                            for athlete in members:
+
+                                athlete['calculated_points'] = (
+                                    avg_pts if roster_ok and not _prelim_dive_blocked(athlete) else 0.0
+                                )
+
+                            if roster_ok and use_meet_wide_pool:
+
+                                if mkey not in meet_states:
+
+                                    meet_states[mkey] = {'pool': {}, 'relays': 0}
+
+                                pool = meet_states[mkey]['pool']
+
+                                for n in unique_names:
+
+                                    if not any(
+                                        _prelim_dive_blocked(a) for a in members if a.get('name') == n
+                                    ):
+
+                                        _add_to_pool(pool, n, ev_nm, cfg)
+
+                            continue
+
+                        if use_meet_wide_pool:
 
                             if mkey not in meet_states:
 
@@ -1061,65 +1421,62 @@ def calculate_points(athletes, scoring_settings=None):
 
                             pool = meet_states[mkey]['pool']
 
-                            for n in unique_names:
+                            can_all = all(_can_add_to_pool(pool, n, ev_nm, cfg) for n in unique_names)
 
-                                _add_to_pool(pool, n, ev_nm, cfg)
+                            for athlete in members:
 
-                        continue
+                                athlete['calculated_points'] = (
+                                    avg_pts if can_all and not _prelim_dive_blocked(athlete) else 0.0
+                                )
 
-                    if use_meet_caps:
+                            if can_all:
 
-                        if mkey not in meet_states:
+                                for n in unique_names:
 
-                            meet_states[mkey] = {'pool': {}, 'relays': 0}
+                                    if not any(
+                                        _prelim_dive_blocked(a) for a in members if a.get('name') == n
+                                    ):
 
-                        pool = meet_states[mkey]['pool']
+                                        _add_to_pool(pool, n, ev_nm, cfg)
 
-                        can_all = all(_can_add_to_pool(pool, n, ev_nm, cfg) for n in unique_names)
+                        else:
 
-                        for athlete in members:
+                            cap = max_individuals_cfg
 
-                            athlete['calculated_points'] = avg_pts if can_all else 0.0
+                            for athlete in members:
 
-                        if can_all:
+                                if _prelim_dive_blocked(athlete):
 
-                            for n in unique_names:
+                                    athlete['calculated_points'] = 0.0
 
-                                _add_to_pool(pool, n, ev_nm, cfg)
+                                elif cap < 999 and team_indiv_counts[team_name] >= cap:
 
-                    else:
+                                    athlete['calculated_points'] = 0.0
 
-                        cap = max_individuals_cfg
+                                else:
 
-                        for athlete in members:
+                                    athlete['calculated_points'] = avg_pts
 
-                            if cap < 999 and team_indiv_counts[team_name] >= cap:
+                                    if cap < 999:
 
-                                athlete['calculated_points'] = 0.0
-
-                            else:
-
-                                athlete['calculated_points'] = avg_pts
-
-                                if cap < 999:
-
-                                    team_indiv_counts[team_name] += 1
+                                        team_indiv_counts[team_name] += 1
 
 
 
-                scored_athletes.extend(group)
+                    scored_athletes.extend(group)
 
 
 
 
-    if use_meet_caps and relay_pool_rule:
+    if process_events_chronologically:
         for (event, gender), ev_athletes in event_list:
             indiv = [a for a in ev_athletes if not a.get('is_relay')]
             relays = [a for a in ev_athletes if a.get('is_relay')]
             if indiv:
                 _process_scoring_event(indiv, gender)
             if relays:
-                _seed_ab_relay_legs_into_pool(relays, cfg, meet_states, gender)
+                if relay_pool_rule:
+                    _seed_ab_relay_legs_into_pool(relays, cfg, meet_states, gender)
                 _process_scoring_event(relays, gender)
     else:
         for (event, gender), ev_athletes in event_list:
@@ -1128,7 +1485,19 @@ def calculate_points(athletes, scoring_settings=None):
     return scored_athletes
 
 
-
+def _apply_pdf_points_overrides(athletes):
+    """When HyTek PDF includes a Points column, use those values instead of calculated."""
+    for a in athletes:
+        pp = a.get('pdf_points')
+        if pp is None or pp == '':
+            continue
+        try:
+            val = float(pp)
+        except (TypeError, ValueError):
+            continue
+        if val < 0:
+            continue
+        a['calculated_points'] = val
 
 
 if __name__ == "__main__":
